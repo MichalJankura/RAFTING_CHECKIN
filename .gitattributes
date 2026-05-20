@@ -1,0 +1,22 @@
+# Default: auto-detect text files and normalize line endings in repo
+* text=auto
+
+# Shell scripts — must stay LF (run inside Docker/Linux)
+*.sh                text eol=lf
+docker-entrypoint.sh text eol=lf
+
+# Windows batch files — CRLF
+*.bat               text eol=crlf
+
+# SQL files — LF (run via psql inside container)
+*.sql               text eol=lf
+
+# Config files — LF
+Dockerfile          text eol=lf
+.dockerignore       text eol=lf
+docker-compose.yml  text eol=lf
+
+# Binary — no conversion
+*.png               binary
+*.jpg               binary
+*.ico               binary
