@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+data/
+uploads/
+.git/
+*.bat
+README.md
+__pycache__/
+server.pid

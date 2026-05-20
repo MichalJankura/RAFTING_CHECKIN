@@ -1,0 +1,28 @@
+{
+  "name": "rafting-dunajec",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "server": "node server/index.js",
+    "server:dev": "node --watch server/index.js",
+    "dev:all": "concurrently \"npm run server:dev\" \"npm run dev\""
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "express": "^4.19.2",
+    "express-session": "^1.18.1",
+    "pg": "^8.12.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "vite": "^5.3.4",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2"
+  }
+}

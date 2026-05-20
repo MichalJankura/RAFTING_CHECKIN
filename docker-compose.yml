@@ -1,0 +1,53 @@
+services:
+  rafting-dunajec:
+    build: .
+    container_name: rafting-dunajec
+
+    # Bind to loopback only on the host.
+    # Netbird's WireGuard interface exposes the port to VPN peers — the app
+    # never needs to be reachable on the host's LAN interface directly.
+    ports:
+      - "127.0.0.1:3001:3001"
+
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+    # Docker secrets are mounted as read-only tmpfs files at /run/secrets/<name>
+    # inside the container. They do not appear in environment variables or
+    # in `docker inspect` output.
+    secrets:
+      - app_encryption_key
+      - app_password
+      - db_password
+      - session_secret
+
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: rafting_dunajec
+      # App connects as the least-privilege user, not postgres superuser.
+      # The entrypoint still uses postgres for schema management.
+      DB_USER: rafting_app
+      # DB_PASSWORD intentionally absent — read from /run/secrets/db_password
+
+    restart: unless-stopped
+
+    # Prevent privilege escalation inside the container
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  app_encryption_key:
+    file: ./secrets/app_encryption_key   # 64 hex chars — openssl rand -hex 32
+  app_password:
+    file: ./secrets/app_password         # web UI login password
+  db_password:
+    file: ./secrets/db_password          # rafting_app DB user password
+  session_secret:
+    file: ./secrets/session_secret       # express-session signing secret
+
+volumes:
+  pg_data:
+    driver: local
