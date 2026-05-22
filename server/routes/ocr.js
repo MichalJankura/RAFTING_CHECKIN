@@ -131,40 +131,60 @@ function tryMRZ(texts) {
 
 // ── Heuristic fallback ────────────────────────────────────────────────────────
 
-// Noise words that appear on ID cards but are not names
-const NOISE = [
-  'SLOVENSKÁ REPUBLIKA', 'ČESKÁ REPUBLIKA', 'IDENTITY CARD', 'ID CARD',
-  'PASSPORT', 'DRIVING LICENCE', 'REPUBLIC', 'NATIONAL',
-  'MENO', 'NAME', 'PRIEZVISKO', 'SURNAME', 'OBČIANSKY',
-];
+// Labels that appear directly before field values in Slovak/EU ID cards.
+// EasyOCR returns each label and each value as a separate text block.
+const SURNAME_LABELS = ['priezvisko', 'surname', 'nachname', 'nom'];
+const NAME_LABELS    = ['meno', 'given names', 'given name', 'vorname', 'prénom'];
+
+function isNameValue(s) {
+  return s.length >= 2 && s.length <= 35 && /^[\p{L}\s\-']+$/u.test(s) && !/\d/.test(s);
+}
+
+function normalizeLabel(s) {
+  return s.toLowerCase().replace(/[/|\\]/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 function tryHeuristic(texts) {
-  const allText = texts.map(t => t.text).join('\n');
-  const lines   = texts.map(t => t.text.trim()).filter(t => t.length >= 2);
+  const lines = texts.map(t => t.text.trim()).filter(t => t.length >= 2);
   let name = null, surname = null, country = null, idCode = null;
 
-  // ID number: Slovak AB123456, Czech passport, 9-digit doc number
+  // ── 1. Label-based extraction ──────────────────────────────────────────────
+  // Slovak ID card layout: label line → value line (sometimes label is split
+  // across two lines, e.g. "Číslo" then "No" then "HJ308700").
+  for (let i = 0; i < lines.length - 1; i++) {
+    const lbl  = normalizeLabel(lines[i]);
+    const val  = lines[i + 1].trim();
+    const val2 = lines[i + 2] ? lines[i + 2].trim() : '';
+
+    if (!surname && SURNAME_LABELS.some(l => lbl.includes(l))) {
+      if (isNameValue(val)) surname = val;
+    }
+    if (!name && NAME_LABELS.some(l => lbl.includes(l))) {
+      if (isNameValue(val)) name = val;
+    }
+  }
+
+  // ── 2. ID number — Slovak AB123456, Czech passport, 9-digit doc number ──────
   for (const t of texts) {
     const m = t.text.match(/\b([A-Z]{2}[0-9]{6,7}|[A-Z][0-9]{7,9}|[0-9]{9})\b/);
     if (m) { idCode = m[1]; break; }
   }
 
-  // Country from keywords
-  const lower = allText.toLowerCase();
-  for (const { country: c, kw } of COUNTRY_KEYWORDS) {
-    if (kw.some(k => lower.includes(k))) { country = c; break; }
+  // ── 3. Country — ISO 3-letter code as standalone detection (most reliable) ──
+  for (const t of texts) {
+    const code = t.text.trim().toUpperCase();
+    if (MRZ_COUNTRY[code]) { country = MRZ_COUNTRY[code]; break; }
   }
 
-  // Names: all-caps lines (Central European chars), no digits, not noise
-  const nameRe = /^[A-ZÁČĎÉĚÍĽĹŇÓÔŔŠŤÚŮÝŽÄÖÜÀÈÌÙÂÊÎÛÔ\- ]{3,35}$/;
-  const nameLines = lines.filter(l =>
-    nameRe.test(l) &&
-    !/\d/.test(l) &&
-    !NOISE.some(n => l.includes(n))
-  );
-
-  if (nameLines.length >= 1) surname = titleCase(nameLines[0]);
-  if (nameLines.length >= 2) name    = titleCase(nameLines[1]);
+  // ── 4. Country fallback — keyword search over space-joined text ─────────────
+  // Join with spaces (not newlines) so multi-word names like "slovenská republika"
+  // match even if EasyOCR returned each word as a separate detection.
+  if (!country) {
+    const flat = lines.join(' ').toLowerCase();
+    for (const { country: c, kw } of COUNTRY_KEYWORDS) {
+      if (kw.some(k => flat.includes(k))) { country = c; break; }
+    }
+  }
 
   return { name, surname, country, idCode };
 }

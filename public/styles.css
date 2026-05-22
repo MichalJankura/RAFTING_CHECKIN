@@ -697,6 +697,25 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 }
 .notice.info { background: var(--primary-tint); border-color: #c0d6cf; color: var(--primary-2); }
 
+/* ---------- ID-action buttons (Scan / Mail) ---------- */
+.id-action-btns {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.btn-id-action {
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+}
+.btn-id-scan {
+  background: var(--accent-tint);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+.btn-id-scan:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* ---------- Layout flex helpers ---------- */
 .row { display: flex; gap: 14px; align-items: center; }
 .col { display: flex; flex-direction: column; gap: 14px; }
@@ -942,6 +961,28 @@ hr.hairline { border: none; border-top: 1px solid var(--border); margin: 16px 0;
 
   /* Cards */
   .card { padding: 14px; }
+
+  /* Card head: allow action buttons to wrap below the title */
+  .card-head { flex-wrap: wrap; gap: 10px; }
+  .id-action-btns {
+    flex: 0 0 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .btn-id-action {
+    min-height: 44px;
+    justify-content: center;
+    padding: 10px 12px;
+    font-size: 13px;
+    gap: 8px;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+  }
+  .btn-id-action svg { width: 18px; height: 18px; flex-shrink: 0; }
+  .btn-id-scan { font-weight: 600; }
+  .btn-id-scan:active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
   /* All fixed-column grids → single column */
   .grid-2,
@@ -1255,6 +1296,42 @@ hr.hairline { border: none; border-top: 1px solid var(--border); margin: 16px 0;
   to { transform: rotate(360deg); }
 }
 
+/* ── OCR result: editable field rows ── */
+.ocr-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  transition: border-color 0.12s, background 0.12s;
+}
+.ocr-field-row:focus-within {
+  border-color: var(--primary);
+  background: var(--surface);
+}
+.ocr-field-label {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 105px;
+  flex-shrink: 0;
+  user-select: none;
+}
+.ocr-field-input {
+  flex: 1;
+  font-weight: 600;
+  font-size: 13px;
+  border: none;
+  background: transparent;
+  outline: none;
+  padding: 2px 0;
+  min-width: 0;
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+.ocr-field-input::placeholder { color: var(--muted-2); font-weight: 400; }
+
 /* ── Responsive ── */
 @media (max-width: 540px) {
   .scan-modal { max-width: 100%; }
@@ -1262,4 +1339,5 @@ hr.hairline { border: none; border-top: 1px solid var(--border); margin: 16px 0;
   .modal { border-radius: var(--r-lg) var(--r-lg) 0 0; max-height: 92vh; }
   .video-frame { aspect-ratio: 3 / 4; } /* portrait on phones */
   .id-frame { width: 88%; }
+  .ocr-field-label { min-width: 80px; }
 }

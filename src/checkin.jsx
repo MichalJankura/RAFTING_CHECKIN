@@ -494,15 +494,13 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
             <div className="card-title"><span className="step-num">1</span> {t('s1_title', lang)}</div>
             <div className="card-sub">{t('s1_sub', lang)}</div>
           </div>
-          <div className="row" style={{ gap: 8, flexShrink: 0 }}>
-            <button type="button" className="btn btn-sm"
-              style={{ gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}
+          <div className="id-action-btns">
+            <button type="button" className="btn btn-sm btn-id-action btn-id-scan"
               onClick={() => setShowScanModal(true)}>
               <Icon name="scan" size={13} />
               {lang === 'sk' ? 'Skenovať / Načítať doklad' : 'Scan ID / Load ID'}
             </button>
-            <button type="button" className="btn btn-sm"
-              style={{ gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}
+            <button type="button" className="btn btn-sm btn-id-action"
               onClick={() => {}}>
               <Icon name="mail" size={13} />
               {lang === 'sk' ? 'Načítať objednávku z mailu' : 'Load order from mail'}
