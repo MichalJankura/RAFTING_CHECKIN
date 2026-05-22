@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 setlocal
 title RAFTING DUNAJEC - Prvy install
 
@@ -9,7 +8,7 @@ echo   RAFTING DUNAJEC - Prvy install
 echo  =========================================
 echo.
 
-:: ── 1. Docker check ───────────────────────────────────────────────────────────
+rem --- 1. Docker check ---
 docker info >nul 2>&1
 if errorlevel 1 (
     echo  CHYBA: Docker nie je spusteny.
@@ -21,11 +20,11 @@ if errorlevel 1 (
 echo  [OK] Docker bezi.
 echo.
 
-:: ── 2. Vytvor priecinok secrets\ ─────────────────────────────────────────────
+rem --- 2. Vytvor priecinok secrets\ ---
 set "SD=%~dp0secrets"
 if not exist "%SD%" mkdir "%SD%"
 
-:: Oprav: ak Docker vytvoril priecinky namiesto suborov, zmaz ich
+rem Oprav: ak Docker vytvoril priecinky namiesto suborov, zmaz ich
 for %%S in (app_encryption_key app_password db_password session_secret backup_passphrase) do (
     if exist "%SD%\%%S\" (
         echo  Opravujem: "%SD%\%%S" je priecinok ^(Docker bug^), mazem...
@@ -33,7 +32,7 @@ for %%S in (app_encryption_key app_password db_password session_secret backup_pa
     )
 )
 
-:: ── 3. Existujuce kluce? ──────────────────────────────────────────────────────
+rem --- 3. Existujuce kluce? ---
 if exist "%SD%\app_encryption_key" (
     echo  POZOR: Tajne kluce uz existuju v priecinku secrets\
     echo  Nove kluce ZMAZU zasifrovanu databazu ^(stara data budu necitatelne^)!
@@ -42,37 +41,40 @@ if exist "%SD%\app_encryption_key" (
     if ERRORLEVEL 2 goto :docker_start
 )
 
-:: ── 4. Generovanie tajnych klucov ────────────────────────────────────────────
+rem --- 4. Generovanie tajnych klucov ---
 echo.
 echo  Generujem tajne kluce (bez BOM, cista ASCII)...
 
-:: app_encryption_key — 64 hex chars (32 nahodnych bajtov)
+rem app_encryption_key - 64 hex chars (32 nahodnych bajtov)
 powershell -NoProfile -Command "$b=New-Object byte[] 32;[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b);[IO.File]::WriteAllText('%SD%\app_encryption_key',(($b|%%{$_.ToString('x2')})-join''),[Text.Encoding]::ASCII)"
 if errorlevel 1 ( echo  CHYBA: app_encryption_key && pause && exit /b 1 )
 
-:: db_password — 64 hex chars
+rem db_password - 64 hex chars
 powershell -NoProfile -Command "$b=New-Object byte[] 32;[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b);[IO.File]::WriteAllText('%SD%\db_password',(($b|%%{$_.ToString('x2')})-join''),[Text.Encoding]::ASCII)"
 if errorlevel 1 ( echo  CHYBA: db_password && pause && exit /b 1 )
 
-:: session_secret — 64 hex chars
+rem session_secret - 64 hex chars
 powershell -NoProfile -Command "$b=New-Object byte[] 32;[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b);[IO.File]::WriteAllText('%SD%\session_secret',(($b|%%{$_.ToString('x2')})-join''),[Text.Encoding]::ASCII)"
 if errorlevel 1 ( echo  CHYBA: session_secret && pause && exit /b 1 )
 
-:: backup_passphrase — 64 hex chars (pre scripts\backup.sh)
+rem backup_passphrase - 64 hex chars (pre scripts\backup.sh)
 powershell -NoProfile -Command "$b=New-Object byte[] 32;[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b);[IO.File]::WriteAllText('%SD%\backup_passphrase',(($b|%%{$_.ToString('x2')})-join''),[Text.Encoding]::ASCII)"
 if errorlevel 1 ( echo  CHYBA: backup_passphrase && pause && exit /b 1 )
 
-:: app_password — 24 alfanumericke znaky (ziadne specialne znaky)
+rem app_password - 24 alfanumericke znaky (ziadne specialne znaky)
 powershell -NoProfile -Command "$b=New-Object byte[] 32;[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b);$p=([Convert]::ToBase64String($b)-replace'[^a-zA-Z0-9]');[IO.File]::WriteAllText('%SD%\app_password',$p.Substring(0,[Math]::Min(24,$p.Length)),[Text.Encoding]::ASCII)"
 if errorlevel 1 ( echo  CHYBA: app_password && pause && exit /b 1 )
 
 echo  [OK] Vsetky kluce vygenerovane.
 echo.
 
-:: ── 5. Build a spustenie kontajnera ─────────────────────────────────────────
+rem --- 5. Build a spustenie kontajnerov ---
 :docker_start
-echo  Buildujem a spustam Docker kontajner...
-echo  (prvy build trva 3-5 minut, dalsi build je rychly)
+echo  Buildujem a spustam Docker kontajnery...
+echo.
+echo  UPOZORNENIE: prvy build stiahne PyTorch + EasyOCR modely (~1.5 GB).
+echo  To moze trvat 15-30 minut podla rychlosti internetu.
+echo  Dalsie buildy su rychle (vrstvy su cachovane).
 echo.
 docker compose up --build -d
 if errorlevel 1 (
@@ -83,18 +85,22 @@ if errorlevel 1 (
 )
 echo.
 
-:: ── 6. Cakanie na server ──────────────────────────────────────────────────────
-echo  Cakam kym server nastartuje...
+rem --- 6. Cakanie na server ---
+rem rafting-dunajec caka kym ocr-service je healthy (start_period 120s + retries).
+rem Celkovo moze spustenie trvat 3-5 minut po dokonceni buildu.
+echo  Cakam kym server nastartuje (moze trvat 3-5 minut)...
 set TRIES=0
 :wait
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 powershell -NoProfile -Command "try{$t=New-Object Net.Sockets.TcpClient;$t.Connect('localhost',3001);$t.Close();exit 0}catch{exit 1}" >nul 2>&1
 if not errorlevel 1 goto :server_ready
 set /a TRIES=%TRIES%+1
-if %TRIES% lss 30 goto :wait
-echo  CHYBA: Server sa nespustil do 60 sekund.
-echo  Logy kontajnera:
-docker logs rafting-dunajec --tail 40
+set /a MOD=%TRIES% %% 10
+if %MOD% equ 0 echo   ... stale cakam (%TRIES%x3 s) - OCR sluzba sa inicializuje...
+if %TRIES% lss 120 goto :wait
+echo  CHYBA: Server sa nespustil do 6 minut.
+echo  Logy kontajnerov:
+docker compose logs --tail 60
 echo.
 pause
 exit /b 1
@@ -103,12 +109,12 @@ exit /b 1
 echo  [OK] Server bezi na porte 3001.
 echo.
 
-:: ── 7. Migracia existujucich zaznamov ────────────────────────────────────────
-echo  Migrácia dat: zasifrovanie existujucich zaznamov...
+rem --- 7. Migracia existujucich zaznamov ---
+echo  Migracia dat: zasifrovanie existujucich zaznamov...
 docker exec rafting-dunajec node /app/server/migrate-encrypt.js
 echo.
 
-:: ── 8. Vypis hesla ────────────────────────────────────────────────────────────
+rem --- 8. Vypis hesla ---
 for /f "usebackq delims=" %%P in ("%SD%\app_password") do set "APP_PASS=%%P"
 
 echo.

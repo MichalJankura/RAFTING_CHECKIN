@@ -3,6 +3,7 @@
 // ============================================================
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Icon } from './icons.jsx';
+import { ScanIdModal } from './ScanIdModal.jsx';
 import {
   ROUTES, INSTRUCTOR_ROUTES, INSTRUCTOR_PRICING, BOAT_PRICES,
   BIKE_PRICES, BIKE_TARIFFS, EXTRAS, EQUIPMENT, COUNTRIES, ID_TYPES,
@@ -346,6 +347,7 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
   const [override, setOverride] = useState(prefill?.manualTotalOverride ?? null);
   const [notes, setNotes] = useState(prefill?.notes || '');
   const [saving, setSaving] = useState(false);
+  const [showScanModal, setShowScanModal] = useState(false);
   const lineIdRef = useRef(lines.length ? Math.max(...lines.map((l) => l.id || 0)) + 1 : 1);
 
   const toggleSvc = (key) => {
@@ -491,6 +493,20 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
           <div>
             <div className="card-title"><span className="step-num">1</span> {t('s1_title', lang)}</div>
             <div className="card-sub">{t('s1_sub', lang)}</div>
+          </div>
+          <div className="row" style={{ gap: 8, flexShrink: 0 }}>
+            <button type="button" className="btn btn-sm"
+              style={{ gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}
+              onClick={() => setShowScanModal(true)}>
+              <Icon name="scan" size={13} />
+              {lang === 'sk' ? 'Skenovať / Načítať doklad' : 'Scan ID / Load ID'}
+            </button>
+            <button type="button" className="btn btn-sm"
+              style={{ gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}
+              onClick={() => {}}>
+              <Icon name="mail" size={13} />
+              {lang === 'sk' ? 'Načítať objednávku z mailu' : 'Load order from mail'}
+            </button>
           </div>
         </div>
         <div className="grid-3">
@@ -933,6 +949,23 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
           <Icon name="save" size={14} /> {saving ? (lang === 'sk' ? 'Ukladám…' : 'Saving…') : isEdit ? t('update', lang) : t('save', lang)}
         </button>
       </div>
+
+      {/* ID scan modal */}
+      {showScanModal &&
+      <ScanIdModal
+          lang={lang}
+          onApply={(fields) => {
+            setCustomer((prev) => ({
+              ...prev,
+              ...(fields.name    ? { name:    sanitizeName(fields.name)        } : {}),
+              ...(fields.surname ? { surname: sanitizeName(fields.surname).slice(0, 20) } : {}),
+              ...(fields.country ? { country: fields.country                  } : {}),
+              ...(fields.idCode  ? { idCode:  sanitizeIdCode(fields.idCode)   } : {}),
+            }));
+          }}
+          onClose={() => setShowScanModal(false)}
+        />
+      }
     </div>);
 
 }

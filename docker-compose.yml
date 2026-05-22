@@ -1,13 +1,35 @@
 services:
+  # ── EasyOCR microservice ──────────────────────────────────────────────────────
+  # Listens on port 5000 inside the Docker network only — never exposed to host.
+  # Images are processed in memory and never stored to disk.
+  ocr-service:
+    build:
+      context: ./ocr-service
+      dockerfile: Dockerfile
+    container_name: rafting-ocr
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # EasyOCR model loading takes ~60s on cold start
+
+  # ── Main app ──────────────────────────────────────────────────────────────────
   rafting-dunajec:
     build: .
     container_name: rafting-dunajec
+    depends_on:
+      ocr-service:
+        condition: service_healthy
 
     # Bind to loopback only on the host.
     # Netbird's WireGuard interface exposes the port to VPN peers — the app
     # never needs to be reachable on the host's LAN interface directly.
     ports:
-      - "127.0.0.1:3001:3001"
+      - "3001:3001"
 
     volumes:
       - pg_data:/var/lib/postgresql/data
@@ -31,6 +53,8 @@ services:
       # The entrypoint still uses postgres for schema management.
       DB_USER: rafting_app
       # DB_PASSWORD intentionally absent — read from /run/secrets/db_password
+      # OCR sidecar address (internal Docker network only)
+      OCR_SERVICE_URL: "http://ocr-service:5000"
 
     restart: unless-stopped
 

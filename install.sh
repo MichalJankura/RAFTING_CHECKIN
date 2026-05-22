@@ -77,24 +77,33 @@ if [ "$GEN_SECRETS" = "1" ]; then
     echo
 fi
 
-# ── 5. Build a spustenie kontajnera ──────────────────────────────────────────
-echo " Buildujem a spúšťam Docker kontajner..."
-echo " (prvý build trvá 3–5 minút, ďalší build je rýchly)"
+# ── 5. Build a spustenie kontajnerov ─────────────────────────────────────────
+echo " Buildujem a spúšťam Docker kontajnery..."
+echo
+echo " UPOZORNENIE: prvý build sťahuje PyTorch + EasyOCR modely (~1.5 GB)."
+echo " To môže trvať 15–30 minút podľa rýchlosti internetu."
+echo " Ďalšie buildy sú rýchle (vrstvy sú cachované)."
 echo
 $DC up --build -d
 echo
 
 # ── 6. Čakanie na server ──────────────────────────────────────────────────────
-echo " Čakám kým server naštartuje..."
+# rafting-dunajec čaká kým ocr-service je healthy (start_period 120 s + retries).
+# Celkovo môže spustenie trvať 3–5 minút po dokončení buildu.
+echo " Čakám kým server naštartuje (môže trvať 3–5 minút)..."
 TRIES=0
 until bash -c 'echo >/dev/tcp/localhost/3001' 2>/dev/null; do
-    sleep 2
+    sleep 3
     TRIES=$((TRIES + 1))
-    if [ "$TRIES" -ge 30 ]; then
-        echo " CHYBA: Server sa nespustil do 60 sekúnd."
-        echo " Logy kontajnera:"
-        $DC logs --tail 40
+    if [ "$TRIES" -ge 120 ]; then
+        echo " CHYBA: Server sa nespustil do 6 minút."
+        echo " Logy kontajnerov:"
+        $DC logs --tail 60
         exit 1
+    fi
+    # Pravidelná informácia každých 30 sekúnd
+    if [ $(( TRIES % 10 )) -eq 0 ]; then
+        echo "  ... stále čakám (${TRIES}×3 s) — OCR služba sa inicializuje..."
     fi
 done
 echo " [OK] Server beží na porte 3001."

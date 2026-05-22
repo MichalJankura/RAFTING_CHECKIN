@@ -8,3 +8,5 @@ uploads/
 README.md
 __pycache__/
 server.pid
+# OCR sidecar has its own build context — exclude from main app image
+ocr-service/

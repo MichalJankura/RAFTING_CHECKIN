@@ -8,6 +8,7 @@ import { dirname, join } from 'path';
 import { readSecret } from './secrets.js';
 import ordersRouter from './routes/orders.js';
 import authRouter   from './routes/auth.js';
+import ocrRouter    from './routes/ocr.js';
 import { requireAuth } from './middleware/requireAuth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,21 +28,19 @@ app.use(cors({
   credentials: true, // required for cookies in dev mode
 }));
 
-// ─── Body parsing ─────────────────────────────────────────────────────────────
-app.use(express.json());
-
 // ─── Session ──────────────────────────────────────────────────────────────────
+// Must be registered BEFORE any route that calls requireAuth.
 app.use(session({
   name:             'sid',
   secret:           SESSION_SECRET,
-  resave:           false,          // in-memory store has no touch(); false is correct
+  resave:           false,
   saveUninitialized: false,
-  rolling:          true,           // reset the 7-day window on every response
+  rolling:          true,
   cookie: {
-    httpOnly: true,                 // JS cannot read the cookie
-    secure:   false,                // app runs plain HTTP behind Netbird VPN — secure:true would silently drop the cookie
-    sameSite: 'strict',             // CSRF protection
-    maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days rolling; operator stays logged in as long as they use the app weekly
+    httpOnly: true,
+    secure:   false,   // plain HTTP behind Netbird VPN — secure:true would drop the cookie
+    sameSite: 'strict',
+    maxAge:   7 * 24 * 60 * 60 * 1000,
   },
 }));
 
@@ -52,6 +51,15 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'same-origin');
   next();
 });
+
+// ─── Body parsing ─────────────────────────────────────────────────────────────
+// /api/ocr carries a base64 image (~5 MB). Register its route with a larger body
+// limit BEFORE the global express.json() so Express never rejects the payload
+// with the default 100 kb ceiling. Session is already initialised above.
+app.use('/api/ocr', requireAuth, express.json({ limit: '7mb' }), ocrRouter);
+
+// Default JSON limit (100 kb) for all other routes.
+app.use(express.json());
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 

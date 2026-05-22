@@ -305,6 +305,15 @@ Write-Host "NOVE HESLO: $pass"
 
 docker compose restart
 ```
+### ZMENA HESLA NA CUSTOM HESLO 
+```powershell
+[System.IO.File]::WriteAllText(".\secrets\app_password", "heslo1234", [System.Text.Encoding]::ASCII)
+
+$pass = [System.IO.File]::ReadAllText(".\secrets\app_password", [System.Text.Encoding]::ASCII)
+Write-Host "NOVE HESLO: $pass"
+
+docker compose restart
+```
 
 ---
 
