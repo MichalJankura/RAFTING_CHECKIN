@@ -9,16 +9,17 @@
 1. [Čo je táto aplikácia](#1-čo-je-táto-aplikácia)
 2. [Architektúra systému](#2-architektúra-systému)
 3. [Požiadavky na hardware a software](#3-požiadavky-na-hardware-a-software)
-4. [Prvá inštalácia — krok za krokom](#4-prvá-inštalácia--krok-za-krokom)
-5. [Generovanie a správa secretov](#5-generovanie-a-správa-secretov)
-6. [Spustenie aplikácie](#6-spustenie-aplikácie)
-7. [Jednorazová migrácia dát](#7-jednorazová-migrácia-dát-len-pri-prenose-existujúcich-záznamov)
-8. [Vzdialený prístup cez Netbird](#8-vzdialený-prístup-cez-netbird)
-9. [Zálohovanie databázy](#9-zálohovanie-databázy)
-10. [Aktualizácia aplikácie](#10-aktualizácia-aplikácie)
-11. [Riešenie problémov](#11-riešenie-problémov)
-12. [Bezpečnostná architektúra](#12-bezpečnostná-architektúra)
-13. [Dôležité súbory a ich umiestnenie](#13-dôležité-súbory-a-ich-umiestnenie)
+4. [Prvá inštalácia — Windows](#4-prvá-inštalácia--windows)
+5. [Prvá inštalácia — Linux](#5-prvá-inštalácia--linux)
+6. [Generovanie a správa secretov](#6-generovanie-a-správa-secretov)
+7. [Spustenie aplikácie](#7-spustenie-aplikácie)
+8. [Jednorazová migrácia dát](#8-jednorazová-migrácia-dát-len-pri-prenose-existujúcich-záznamov)
+9. [Vzdialený prístup cez Netbird](#9-vzdialený-prístup-cez-netbird)
+10. [Zálohovanie databázy](#10-zálohovanie-databázy)
+11. [Aktualizácia aplikácie](#11-aktualizácia-aplikácie)
+12. [Riešenie problémov](#12-riešenie-problémov)
+13. [Bezpečnostná architektúra](#13-bezpečnostná-architektúra)
+14. [Dôležité súbory a ich umiestnenie](#14-dôležité-súbory-a-ich-umiestnenie)
 
 ---
 
@@ -27,6 +28,7 @@
 **Rafting Dunajec** je lokálny check-in systém pre recepciu raftingovej spoločnosti. Umožňuje:
 
 - Vytváranie a správu objednávok (rafting, požičovňa lodí, bicyklov)
+- **Skenovanie dokladov totožnosti** cez kameru alebo skener (OCR — automatické vyplnenie mena, priezviska, krajiny, čísla dokladu)
 - Správu cenníka
 - Kalendárny a denný prehľad
 - Tlač potvrdení / zmlúv
@@ -35,26 +37,34 @@
 - Beží **lokálne na jednom počítači** zákazníka — žiadny cloud, žiadny internet
 - Vzdialený prístup je riešený cez **Netbird VPN** (WireGuard)
 - Všetky citlivé údaje zákazníkov (meno, ID, adresa) sú **šifrované AES-256-GCM**
-- Databáza PostgreSQL beží **vnútri Docker kontajnera** (nie na hostiteľskom systéme)
+- Databáza PostgreSQL a OCR engine bežia **vnútri Docker kontajnerov** (nie na hostiteľskom systéme)
 - Prístup do aplikácie je chránený **heslom** (session 7 dní)
+- Odfotené doklady **sa nikdy neukladajú** — obraz sa spracuje OCR v pamäti a zahodí
 
 ---
 
 ## 2. Architektúra systému
 
 ```
-Hostiteľský počítač (Windows 10/11)
+Hostiteľský počítač (Windows 10/11 alebo Linux)
 │
-├── Docker Desktop
-│   └── Kontajner: rafting-dunajec
-│       ├── Node.js/Express server (port 3001, bind: 127.0.0.1)
-│       │   ├── React frontend (Vite build, servovaný Expressom)
-│       │   ├── REST API (/api/orders, /api/auth)
-│       │   └── AES-256-GCM šifrovanie PII polí
-│       └── PostgreSQL 13 (localhost:5432, len vnútri kontajnera)
-│           ├── Databáza: rafting_dunajec
-│           ├── Užívateľ: rafting_app (obmedzené oprávnenia)
-│           └── Audit log trigger (každý INSERT/UPDATE/DELETE)
+├── Docker Desktop / Docker Engine
+│   │
+│   ├── Kontajner: rafting-dunajec
+│   │   ├── Node.js/Express server (port 3001, bind: 127.0.0.1)
+│   │   │   ├── React frontend (Vite build, servovaný Expressom)
+│   │   │   ├── REST API (/api/orders, /api/auth, /api/ocr)
+│   │   │   └── AES-256-GCM šifrovanie PII polí
+│   │   └── PostgreSQL 13 (localhost:5432, len vnútri kontajnera)
+│   │       ├── Databáza: rafting_dunajec
+│   │       ├── Užívateľ: rafting_app (obmedzené oprávnenia)
+│   │       └── Audit log trigger (každý INSERT/UPDATE/DELETE)
+│   │
+│   └── Kontajner: rafting-ocr   ← OCR sidecar (bez vystavených portov)
+│       ├── Python / Flask / EasyOCR
+│       ├── CPU-only PyTorch (bez GPU požiadaviek)
+│       ├── Jazyky: sk, cs, en, hu, de, pl
+│       └── Dostupný LEN vnútri Docker siete (nie z internetu)
 │
 ├── Docker Volume: pg_data (perzistentná databáza)
 ├── Adresár: secrets/ (súbory s heslami, NIE v gite)
@@ -63,11 +73,24 @@ Hostiteľský počítač (Windows 10/11)
     └── Sprístupňuje port 3001 vzdialeným zariadeniam cez VPN
 ```
 
-**Tok dát pri prístupe:**
+**Tok dát pri skenovaní dokladu:**
+```
+Prehliadač (kamera/súbor)
+        ↓ base64 JPEG (HTTPS/VPN)
+  Node.js /api/ocr/scan-id
+        ↓ interná Docker sieť (len v pamäti)
+  rafting-ocr (EasyOCR)
+        ↓ { text, confidence }[]
+  Node.js MRZ parser / heuristika
+        ↓ { name, surname, country, idCode }
+  Prehliadač — obraz okamžite zahodený
+```
+
+**Tok dát pri ukladaní objednávky:**
 ```
 Prehliadač → Netbird VPN → 127.0.0.1:3001 → Node.js
                                                ↓
-                                    AES-256-GCM encrypt/decrypt
+                                    AES-256-GCM encrypt
                                                ↓
                                          PostgreSQL
 ```
@@ -77,12 +100,16 @@ Prehliadač → Netbird VPN → 127.0.0.1:3001 → Node.js
 ## 3. Požiadavky na hardware a software
 
 ### Hardware (minimálne)
-- **RAM:** 4 GB (odporúčané 8 GB)
-- **CPU:** 2 jadrá
-- **Disk:** 20 GB voľného miesta (pre OS, Docker, databázu a zálohy)
-- **OS:** Windows 10 Pro / Windows 11 Pro *(Home verzia nepodporuje Docker volumes správne)*
+- **RAM:** 4 GB (odporúčané 8 GB — OCR service využíva ~1.5 GB pri štarte)
+- **CPU:** 2 jadrá (OCR beží na CPU, GPU nie je potrebné)
+- **Disk:** 20 GB voľného miesta (OS, Docker, databáza, zálohy + ~2 GB pre PyTorch/EasyOCR vrstvy)
+- **OS:** Windows 10/11 Pro alebo Linux (Ubuntu 20.04+, Debian 11+, Rocky Linux 8+)
+
+> **Windows Home:** Nepodporovaný — Docker volumes nefungujú spoľahlivo.
 
 ### Software
+
+#### Windows
 
 | Software | Verzia | Kde stiahnuť |
 |----------|--------|--------------|
@@ -90,33 +117,53 @@ Prehliadač → Netbird VPN → 127.0.0.1:3001 → Node.js
 | Git | ľubovoľná | https://git-scm.com/download/win |
 | Netbird | najnovší | https://netbird.io/download |
 
-> **Poznámka:** Node.js na hostiteľskom počítači **nie je potrebný** — beží len vnútri Docker kontajnera.
+#### Linux (Ubuntu/Debian)
 
-### Kontrola pred inštaláciou
+```bash
+# Docker Engine + Compose plugin (bez Docker Desktop)
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+newgrp docker
 
-Otvor PowerShell a over:
-```powershell
-docker --version        # má byť Docker version 24.x alebo novší
-docker compose version  # má byť Docker Compose version v2.x
-git --version           # ľubovoľná verzia
+# Git
+sudo apt install -y git
+
+# Netbird (voliteľný — len pre vzdialený prístup)
+curl -fsSL https://pkgs.netbird.io/install.sh | sudo bash
 ```
+
+#### Linux (RHEL / Rocky / AlmaLinux)
+
+```bash
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin git
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+**Kontrola po inštalácii:**
+
+```bash
+docker --version          # Docker version 24.x alebo novší
+docker compose version    # Docker Compose version v2.x
+git --version
+```
+
+> **Poznámka:** Node.js, Python ani PyTorch na hostiteľskom počítači **nie sú potrebné** — všetko beží vnútri Docker kontajnerov.
 
 ---
 
-## 4. Prvá inštalácia — krok za krokom
+## 4. Prvá inštalácia — Windows
 
 ### Krok 1: Stiahni zdrojový kód
 
 ```powershell
-# Vytvor priečinok pre aplikáciu (napríklad na ploche)
 cd $env:USERPROFILE\Desktop
-
-# Stiahni repo (alebo skopíruj priečinok z USB)
 git clone <URL_REPOZITARA> "RAFTING DUNAJEC"
 cd "RAFTING DUNAJEC"
 ```
 
-Ak nemáš git repozitár, skopíruj celý priečinok projektu na cieľový počítač (USB, sieťový disk, atď.).
+Ak nemáš git, skopíruj celý priečinok projektu na cieľový počítač (USB, sieťový disk).
 
 ### Krok 2: Skontroluj štruktúru projektu
 
@@ -126,55 +173,61 @@ RAFTING DUNAJEC/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-entrypoint.sh
+├── install.bat                 ← automatická inštalácia (Windows)
+├── START.bat                   ← spustenie po reštarte (Windows)
+├── STOP.bat
 ├── package.json
 ├── package-lock.json
-├── .env.example
-├── src/                    ← React frontend
-├── server/                 ← Node.js backend
-│   ├── index.js
-│   ├── db.js
-│   ├── schema.sql
-│   ├── schema-security.sql
-│   ├── crypto-fields.js
-│   ├── secrets.js
-│   ├── migrate-encrypt.js
-│   ├── middleware/
-│   │   └── requireAuth.js
+├── src/                        ← React frontend
+├── server/                     ← Node.js backend
 │   └── routes/
 │       ├── orders.js
-│       └── auth.js
+│       ├── auth.js
+│       └── ocr.js              ← OCR proxy + MRZ parser
+├── ocr-service/                ← Python EasyOCR sidecar
+│   ├── Dockerfile
+│   ├── app.py
+│   └── requirements.txt
 ├── scripts/
 │   └── backup.sh
 ├── public/
 │   ├── styles.css
 │   └── logo.png
-└── secrets/                ← TU BUDEŠ VYTVÁRAŤ HESLA (viď Krok 3)
-    └── README.txt
+└── secrets/                    ← TU BUDEŠ VYTVÁRAŤ HESLA (viď Krok 3)
 ```
 
-> **DÔLEŽITÉ:** Priečinok `secrets/` nesmie byť v git repozitári. Je zahrnutý v `.gitignore`. Súbory v ňom vytváraš **manuálne** na každom novom počítači.
+> **DÔLEŽITÉ:** Priečinok `secrets/` nesmie byť v git repozitári. Je zahrnutý v `.gitignore`.
 
-### Krok 3: Vytvor secret súbory
+### Krok 3: Spusti automatickú inštaláciu
 
-Toto je **najdôležitejší krok**. Bez týchto súborov aplikácia nenaštartuje.
+Najjednoduchší spôsob — dvojklik na:
 
-Otvor PowerShell v priečinku projektu:
+```
+install.bat
+```
+
+Skript automaticky:
+1. Overí, či Docker beží
+2. Vygeneruje všetky secret súbory
+3. Zbuilduje oba Docker kontajnery (**prvý build trvá 15–30 minút** — sťahuje PyTorch + EasyOCR modely ~1.5 GB)
+4. Počká, kým server naštartuje
+5. Zobrazí heslo do aplikácie
+
+> **Po skončení si IHNEĎ ulož heslo** do password managera.
+
+### Krok 3 (manuálne): Vytvor secret súbory cez PowerShell
+
+Ak nechceš použiť `install.bat`:
 
 ```powershell
 cd "$env:USERPROFILE\Desktop\RAFTING DUNAJEC"
-```
 
-Spusti nasledujúce príkazy jeden po druhom:
-
-```powershell
-# Pomocná funkcia na generovanie náhodných hexadecimálnych hodnôt
 function New-HexSecret([int]$bytes) {
     $buf = New-Object byte[] $bytes
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buf)
     return ($buf | ForEach-Object { $_.ToString('x2') }) -join ''
 }
 
-# Pomocná funkcia na generovanie náhodných Base64 hodnôt
 function New-B64Secret([int]$bytes) {
     $buf = New-Object byte[] $bytes
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buf)
@@ -183,92 +236,153 @@ function New-B64Secret([int]$bytes) {
 
 $base = ".\secrets"
 
-# 1. Šifrovací kľúč pre databázu (32 bajtov = 64 hex znakov)
 [System.IO.File]::WriteAllText("$base\app_encryption_key", (New-HexSecret 32), [System.Text.Encoding]::ASCII)
-
-# 2. Heslo pre prihlásenie do webovej aplikácie
 [System.IO.File]::WriteAllText("$base\app_password",       (New-B64Secret 18), [System.Text.Encoding]::ASCII)
-
-# 3. Heslo pre databázového používateľa rafting_app
 [System.IO.File]::WriteAllText("$base\db_password",        (New-HexSecret 16), [System.Text.Encoding]::ASCII)
-
-# 4. Tajomstvo pre podpisovanie session cookies
 [System.IO.File]::WriteAllText("$base\session_secret",     (New-HexSecret 32), [System.Text.Encoding]::ASCII)
-
-# 5. Heslo pre šifrované zálohy databázy
 [System.IO.File]::WriteAllText("$base\backup_passphrase",  (New-B64Secret 24), [System.Text.Encoding]::ASCII)
-```
 
-**Over že súbory vznikli správne:**
-```powershell
-Get-ChildItem .\secrets\ | Select-Object Name, Length
-```
-
-Očakávaný výstup:
-```
-Name                Length
-----                ------
-app_encryption_key      64
-app_password            24
-backup_passphrase       32
-db_password             32
-session_secret          64
-README.txt            1394
-```
-
-Dĺžky musia sedieť **presne** — inak aplikácia odmietne naštartovať.
-
-**Zobraz a ulož heslo do aplikácie:**
-```powershell
+# Zobraz heslo do aplikácie
 $pass = [System.IO.File]::ReadAllText(".\secrets\app_password", [System.Text.Encoding]::ASCII)
 Write-Host "HESLO DO APLIKACIE: $pass"
 ```
 
-> **KRITICKÉ:** Toto heslo si **ihneď ulož** do password managera (KeePass, Bitwarden).
-> Ak ho stratíš, musíš vygenerovať nové (postup v sekcii [Riešenie problémov](#11-riešenie-problémov)).
->
-> Ešte dôležitejší je `app_encryption_key` — ak ho stratíš, **všetky šifrované dáta v databáze sú nenávratne stratené**.
+**Over dĺžky súborov:**
+```powershell
+Get-ChildItem .\secrets\ | Select-Object Name, Length
+```
 
-### Krok 4: Spusti Docker a postav image
+Očakávané dĺžky:
+```
+app_encryption_key   64
+app_password         24
+backup_passphrase    32
+db_password          32
+session_secret       64
+```
+
+### Krok 4: Zbuilduj a spusti kontajnery
 
 ```powershell
 cd "$env:USERPROFILE\Desktop\RAFTING DUNAJEC"
 docker compose up --build -d
 ```
 
-Prvé spustenie trvá **5–15 minút** (sťahuje Node.js image, inštaluje PostgreSQL, builduje frontend). Ďalšie spustenia sú rýchle (pod 30 sekúnd).
-
-**Sleduj priebeh:**
+Sleduj priebeh:
 ```powershell
 docker compose logs -f
 ```
 
-Stlač `Ctrl+C` na zastavenie sledovania (kontajner beží ďalej na pozadí).
+### Krok 5: Otvor aplikáciu
 
-**Čo uvidíš pri úspešnom štarte:**
+```
+http://localhost:3001
+```
+
+Vlož heslo z `secrets/app_password`. Po úspešnom prihlásení si prihlásený **7 dní**.
+
+---
+
+## 5. Prvá inštalácia — Linux
+
+### Krok 1: Stiahni zdrojový kód
+
+```bash
+cd ~/Desktop
+# alebo /opt/rafting ak chceš inštaláciu pre celý systém
+git clone <URL_REPOZITARA> "RAFTING DUNAJEC"
+cd "RAFTING DUNAJEC"
+```
+
+### Krok 2: Skontroluj oprávnenia skriptu
+
+```bash
+chmod +x docker-entrypoint.sh scripts/backup.sh
+```
+
+### Krok 3: Vytvor secret súbory
+
+```bash
+mkdir -p secrets
+
+# AES-256 kľúč pre databázu (64 hex znakov)
+openssl rand -hex 32 > secrets/app_encryption_key
+
+# Heslo do webovej aplikácie (24 base64 znakov)
+openssl rand -base64 18 | tr -d '\n=' | head -c 24 > secrets/app_password
+
+# Heslo pre databázového používateľa (32 hex znakov)
+openssl rand -hex 16 > secrets/db_password
+
+# Tajomstvo pre session cookies (64 hex znakov)
+openssl rand -hex 32 > secrets/session_secret
+
+# Heslo pre šifrované zálohy (32 base64 znakov)
+openssl rand -base64 24 | tr -d '\n=' | head -c 32 > secrets/backup_passphrase
+
+# Over dĺžky súborov
+wc -c secrets/*
+```
+
+Očakávané dĺžky:
+```
+ 64 secrets/app_encryption_key
+ 24 secrets/app_password
+ 32 secrets/backup_passphrase
+ 32 secrets/db_password
+ 64 secrets/session_secret
+```
+
+**Zobraz a ulož heslo:**
+```bash
+cat secrets/app_password
+```
+
+> **KRITICKÉ:** Toto heslo si **ihneď ulož** do password managera. Ak stratíš `app_encryption_key`, **všetky dáta v databáze sú nenávratne stratené**.
+
+### Krok 4: Zbuilduj a spusti kontajnery
+
+```bash
+docker compose up --build -d
+```
+
+> **Prvý build trvá 15–30 minút** — sťahuje PyTorch (~800 MB) + EasyOCR modely (~700 MB). Ďalšie buildy sú rýchle (cache).
+
+Sleduj priebeh:
+```bash
+docker compose logs -f
+# Ctrl+C zastaví sledovanie, kontajner beží ďalej
+```
+
+Úspešný štart:
 ```
 [PG] Prvé spustenie — inicializujem databázu...
 [PG] Schéma je aktuálna.
-[PG] Bezpečnostná schéma je aktuálna.
-[PG] Heslo používateľa 'rafting_app' aktualizované.
 [NODE] Spúšťam server na porte 3001...
 RAFTING DUNAJEC server bezi na http://localhost:3001
 ```
 
 ### Krok 5: Otvor aplikáciu
 
-Otvor prehliadač a choď na:
-```
-http://localhost:3001
+```bash
+xdg-open http://localhost:3001
+# alebo manuálne v prehliadači: http://localhost:3001
 ```
 
-Uvidíš prihlasovaciu stránku. Vlož heslo z `secrets/app_password`.
+### Automatický štart po reboote (Linux)
 
-Po úspešnom prihlásení si prihlásený **7 dní** — heslo sa nebude pýtať znova, pokiaľ ho pravidelne používaš.
+```bash
+# Docker service sa spustí automaticky:
+sudo systemctl enable docker
+
+# Kontajner sa reštartuje automaticky (restart: unless-stopped v compose):
+# Stačí raz spustiť: docker compose up -d
+# Po reboote sa sám obnoví.
+```
 
 ---
 
-## 5. Generovanie a správa secretov
+## 6. Generovanie a správa secretov
 
 ### Popis každého secret súboru
 
@@ -282,64 +396,82 @@ Po úspešnom prihlásení si prihlásený **7 dní** — heslo sa nebude pýta�
 
 ### Záloha secretov
 
-**Odporúčaný postup:**
 1. Skopíruj celý priečinok `secrets/` na USB kľúč
 2. Ulož obsah každého súboru aj do password managera (KeePass / Bitwarden)
-3. `backup_passphrase` uchovávaj na **inom mieste** ako ostatné secrety — napríklad len na USB kľúči uloženom inde
+3. `backup_passphrase` uchovávaj na **inom mieste** ako ostatné secrety
 
 ### Zmena hesla do aplikácie
 
+#### Windows (PowerShell)
 ```powershell
-cd "$env:USERPROFILE\Desktop\RAFTING DUNAJEC"
-
-function New-B64Secret([int]$bytes) {
-    $buf = New-Object byte[] $bytes
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buf)
-    return [Convert]::ToBase64String($buf)
+function New-B64Secret([int]$b) {
+    $x = New-Object byte[] $b
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($x)
+    return [Convert]::ToBase64String($x)
 }
-
 [System.IO.File]::WriteAllText(".\secrets\app_password", (New-B64Secret 18), [System.Text.Encoding]::ASCII)
-
 $pass = [System.IO.File]::ReadAllText(".\secrets\app_password", [System.Text.Encoding]::ASCII)
 Write-Host "NOVE HESLO: $pass"
-
 docker compose restart
 ```
-### ZMENA HESLA NA CUSTOM HESLO 
+
+#### Windows — vlastné heslo
 ```powershell
-[System.IO.File]::WriteAllText(".\secrets\app_password", "heslo1234", [System.Text.Encoding]::ASCII)
+[System.IO.File]::WriteAllText(".\secrets\app_password", "moje_heslo123", [System.Text.Encoding]::ASCII)
+docker compose restart
+```
 
-$pass = [System.IO.File]::ReadAllText(".\secrets\app_password", [System.Text.Encoding]::ASCII)
-Write-Host "NOVE HESLO: $pass"
+#### Linux (Bash)
+```bash
+openssl rand -base64 18 | tr -d '\n=' | head -c 24 > secrets/app_password
+echo "NOVE HESLO: $(cat secrets/app_password)"
+docker compose restart
+```
 
+#### Linux — vlastné heslo
+```bash
+printf 'moje_heslo123' > secrets/app_password
 docker compose restart
 ```
 
 ---
 
-## 6. Spustenie aplikácie
+## 7. Spustenie aplikácie
 
 ### Normálne spustenie (po reštarte počítača)
 
-Docker Desktop musí byť spustený. Potom:
-
+#### Windows
 ```powershell
+# Dvojklik na START.bat — alebo v PowerShell:
 cd "$env:USERPROFILE\Desktop\RAFTING DUNAJEC"
+docker compose up -d
+```
+
+#### Linux
+```bash
+cd ~/Desktop/"RAFTING DUNAJEC"
 docker compose up -d
 ```
 
 ### Zastavenie aplikácie
 
+#### Windows
 ```powershell
+docker compose down
+# alebo dvojklik na STOP.bat
+```
+
+#### Linux
+```bash
 docker compose down
 ```
 
-> **Poznámka:** `docker compose down` **nemazaže dáta**. Databáza je uložená vo volume `pg_data` a prežije zastavenie aj reštart počítača.
+> **Poznámka:** `docker compose down` **nemazaže dáta**. Databáza je uložená vo volume `pg_data`.
 
 ### Kontrola stavu
 
-```powershell
-# Je kontajner spustený?
+```bash
+# Oba kontajnery musia byť "running" / "healthy"
 docker compose ps
 
 # Posledné logy
@@ -347,24 +479,24 @@ docker compose logs --tail=20
 
 # Sledovať logy v reálnom čase (Ctrl+C na zastavenie)
 docker compose logs -f
+
+# Logy len OCR servisu
+docker compose logs ocr-service --tail=20
 ```
 
 ### Automatický štart po zapnutí počítača
 
-**Docker Desktop:**
-`Settings → General → Start Docker Desktop when you sign in` — zapni.
+**Windows:** `Docker Desktop → Settings → General → Start Docker Desktop when you sign in`
 
-**Kontajner** sa automaticky reštartuje keď Docker naštartuje, pretože `docker-compose.yml` obsahuje `restart: unless-stopped`. Stačí ho raz spustiť príkazom `docker compose up -d`.
+**Linux:** `sudo systemctl enable docker` (kontajner sa obnoví automaticky vďaka `restart: unless-stopped`)
 
 ---
 
-## 7. Jednorazová migrácia dát (len pri prenose existujúcich záznamov)
+## 8. Jednorazová migrácia dát (len pri prenose existujúcich záznamov)
 
-> **Kedy je potrebná:** Len ak prenášaš existujúce objednávky z inej inštalácie alebo zo starého systému. Pri čistej novej inštalácii tento krok **preskočiť**.
+> **Kedy je potrebná:** Len ak prenášaš existujúce objednávky z inej inštalácie. Pri čistej novej inštalácii tento krok **preskočiť**.
 
-Migrácia zašifruje všetky existujúce plaintext záznamy v databáze. Je **bezpečná opakovane spustiť** — už zašifrované záznamy automaticky preskočí.
-
-```powershell
+```bash
 docker exec rafting-dunajec node /app/server/migrate-encrypt.js
 ```
 
@@ -377,106 +509,119 @@ docker exec rafting-dunajec node /app/server/migrate-encrypt.js
 
 ---
 
-## 8. Vzdialený prístup cez Netbird
+## 9. Vzdialený prístup cez Netbird
 
-Netbird umožňuje pristupovať k aplikácii z iného zariadenia (notebook, tablet) cez internet, akoby bolo zariadenie v lokálnej sieti zákazníka.
+Netbird umožňuje pristupovať k aplikácii z iného zariadenia cez internet, akoby bolo v lokálnej sieti.
 
-### Inštalácia Netbird na hostiteľský počítač (server u zákazníka)
+### Inštalácia Netbird na hostiteľský počítač
 
-1. Stiahni a nainštaluj Netbird z `https://netbird.io/download`
-2. Vytvor si účet na `https://app.netbird.io`
-3. V Netbird dashboarde vygeneruj **Setup Key** (`Setup Keys → Add Key`)
-4. V PowerShell na počítači zákazníka:
+#### Windows
+1. Stiahni a nainštaluj z `https://netbird.io/download`
+2. Vytvor účet na `https://app.netbird.io`
+3. V dashboarde: `Setup Keys → Add Key`
+4. V PowerShell:
    ```powershell
    netbird up --setup-key <TVOJ_SETUP_KEY>
+   netbird status   # zobrazí Netbird IP (100.x.x.x)
    ```
-5. Zisti Netbird IP adresu tohto počítača:
-   ```powershell
-   netbird status
-   ```
-   IP bude v tvare `100.x.x.x` — **zapamätaj si ju**.
+
+#### Linux
+```bash
+sudo netbird up --setup-key <TVOJ_SETUP_KEY>
+netbird status   # zobrazí Netbird IP (100.x.x.x)
+```
 
 ### Sprístupnenie portu 3001 cez Netbird
 
-Aplikácia počúva na `127.0.0.1:3001`. Aby bola prístupná cez Netbird VPN, treba presmerovať port.
+Aplikácia počúva na `127.0.0.1:3001`. Treba presmerovať na Netbird IP.
 
-Otvor PowerShell **ako administrátor**:
+#### Windows (PowerShell ako administrátor)
 ```powershell
-# Nastav presmerovania (nahraď 100.x.x.x skutočnou Netbird IP)
+# Nahraď 100.x.x.x skutočnou Netbird IP
 netsh interface portproxy add v4tov4 `
     listenaddress=100.x.x.x `
     listenport=3001 `
     connectaddress=127.0.0.1 `
     connectport=3001
 
-# Over nastavenie
 netsh interface portproxy show all
 ```
 
-**Alternatíva — zmena v docker-compose.yml:**
+#### Linux
+```bash
+# Možnosť A — port forward cez iptables (nahraď 100.x.x.x)
+sudo iptables -t nat -A PREROUTING -i netbird0 -p tcp --dport 3001 \
+    -j DNAT --to-destination 127.0.0.1:3001
+sudo iptables -A FORWARD -p tcp -d 127.0.0.1 --dport 3001 -j ACCEPT
+```
+
+**Možnosť B (obe OS) — zmena v `docker-compose.yml`:**
 ```yaml
 ports:
   - "100.x.x.x:3001:3001"   # nahraď 100.x.x.x Netbird IP hostiteľa
 ```
 Potom: `docker compose up -d`
 
-### Inštalácia Netbird na klientské zariadenie (tvoj notebook / tablet zákazníka)
+### Pripojenie z klientského zariadenia
 
-1. Nainštaluj Netbird
-2. Prihlás sa do **rovnakého Netbird účtu** alebo použi Peer Invite z dashboardu
-3. Po spojení otvor prehliadač:
-   ```
-   http://100.x.x.x:3001
-   ```
-   kde `100.x.x.x` je Netbird IP hostiteľského počítača
+1. Nainštaluj Netbird, prihlásiť sa do rovnakého účtu
+2. Otvor prehliadač: `http://100.x.x.x:3001`
 
-### Overenie spojenia
-
-```powershell
-# Na klientskom zariadení over spojenie:
+```bash
+# Over spojenie:
 netbird status
 ping 100.x.x.x
 ```
 
 ---
 
-## 9. Zálohovanie databázy
+## 10. Zálohovanie databázy
 
 ### Manuálna záloha
 
-```powershell
+```bash
 docker exec rafting-dunajec /app/scripts/backup.sh
 ```
 
-Záloha sa uloží do `/backups` **vnútri kontajnera**. Aby zálohy boli na hostiteľskom disku, uprav `docker-compose.yml`:
+Záloha sa uloží do `/backups` vnútri kontajnera. Pre zálohy na hostiteľskom disku uprav `docker-compose.yml`:
 
+#### Windows
 ```yaml
 volumes:
   - pg_data:/var/lib/postgresql/data
-  - C:/Zalohy/Rafting:/backups      # ← pridaj tento riadok
+  - C:/Zalohy/Rafting:/backups
 ```
 
-Potom reštartuj: `docker compose up -d`
+#### Linux
+```yaml
+volumes:
+  - pg_data:/var/lib/postgresql/data
+  - /home/user/rafting-backups:/backups
+```
 
-### Automatická denná záloha (Windows Task Scheduler)
+Potom: `docker compose up -d`
 
-1. Otvor **Plánovač úloh** (Task Scheduler)
-2. `Vytvoriť základnú úlohu...`
-3. Nastavenia:
-   - **Názov:** Rafting záloha
-   - **Trigger:** Každý deň, čas: 02:00
-   - **Akcia:** Spustenie programu
-   - **Program:** `powershell.exe`
-   - **Argumenty:** `-NonInteractive -Command "docker exec rafting-dunajec /app/scripts/backup.sh"`
-4. Zapni `Spustiť bez ohľadu na to, či je používateľ prihlásený`
+### Automatická denná záloha
+
+#### Windows (Task Scheduler)
+1. Otvor **Plánovač úloh** → `Vytvoriť základnú úlohu`
+2. Trigger: každý deň 02:00
+3. Program: `powershell.exe`
+4. Argumenty: `-NonInteractive -Command "docker exec rafting-dunajec /app/scripts/backup.sh"`
+
+#### Linux (cron)
+```bash
+crontab -e
+# Pridaj riadok:
+0 2 * * * docker exec rafting-dunajec /app/scripts/backup.sh >> /var/log/rafting-backup.log 2>&1
+```
 
 ### Obnovenie zo zálohy
 
+#### Windows
 ```powershell
-# 1. Skopíruj zálohovací súbor do kontajnera
 docker cp "C:\Zalohy\Rafting\rafting_20260101_020000.sql.gpg" rafting-dunajec:/tmp/
 
-# 2. Dešifruj zálohu do SQL súboru
 docker exec rafting-dunajec gpg `
     --decrypt `
     --passphrase-file /run/secrets/backup_passphrase `
@@ -484,8 +629,22 @@ docker exec rafting-dunajec gpg `
     --output /tmp/restore.sql `
     /tmp/rafting_20260101_020000.sql.gpg
 
-# 3. Obnov databázu (PREPÍŠE existujúce dáta!)
 docker exec rafting-dunajec su -s /bin/bash postgres -c `
+    "psql -U postgres -d rafting_dunajec -f /tmp/restore.sql"
+```
+
+#### Linux
+```bash
+docker cp ~/rafting-backups/rafting_20260101_020000.sql.gpg rafting-dunajec:/tmp/
+
+docker exec rafting-dunajec gpg \
+    --decrypt \
+    --passphrase-file /run/secrets/backup_passphrase \
+    --batch \
+    --output /tmp/restore.sql \
+    /tmp/rafting_20260101_020000.sql.gpg
+
+docker exec rafting-dunajec su -s /bin/bash postgres -c \
     "psql -U postgres -d rafting_dunajec -f /tmp/restore.sql"
 ```
 
@@ -493,19 +652,19 @@ docker exec rafting-dunajec su -s /bin/bash postgres -c `
 
 ---
 
-## 10. Aktualizácia aplikácie
+## 11. Aktualizácia aplikácie
 
-Keď dostaneš novú verziu kódu:
-
-```powershell
-cd "$env:USERPROFILE\Desktop\RAFTING DUNAJEC"
-
-# 1. Stiahni novú verziu (ak používaš git)
+```bash
+# 1. Stiahni novú verziu
 git pull
 
-# 2. Zastav a znova postav kontajner
-docker compose down
-docker compose up --build -d
+# 2. Rebuild hlavnej aplikácie (rýchly — cache)
+docker compose build rafting-dunajec
+docker compose up -d
+
+# Ak sa zmenil aj ocr-service:
+docker compose build
+docker compose up -d
 
 # 3. Over úspešný štart
 docker compose logs --tail=20
@@ -518,12 +677,11 @@ docker compose logs --tail=20
 
 ---
 
-## 11. Riešenie problémov
+## 12. Riešenie problémov
 
 ### Kontajner sa nespustí / točí v slučke
 
-**Skontroluj logy:**
-```powershell
+```bash
 docker compose logs --tail=30
 ```
 
@@ -533,17 +691,46 @@ CHYBA: db_password secret ani DB_PASSWORD env var nie su nastavene!
 ```
 Riešenie: Vytvor súbory podľa [Kroku 3](#krok-3-vytvor-secret-súbory).
 
-**Najčastejšia príčina B: Secret súbory sú priečinky namiesto súborov**
+**Najčastejšia príčina B: Secret súbory sú priečinky namiesto súborov (Windows)**
 
 Docker ich niekedy vytvorí ako priečinky keď ich nenájde pred prvým spustením.
+
 ```powershell
 Get-ChildItem .\secrets\ | Select-Object Name, Length, PSIsContainer
-```
-Ak stĺpec `PSIsContainer` ukazuje `True`, sú to priečinky — treba ich zmazať a znova vytvoriť:
-```powershell
+# Ak PSIsContainer = True, sú to priečinky — zmaž ich:
 Get-ChildItem .\secrets\ | Where-Object { $_.PSIsContainer -and $_.Name -ne 'README.txt' } | Remove-Item -Recurse -Force
 ```
-Potom znova spusti príkazy z Kroku 3.
+
+```bash
+# Linux — over typy
+ls -la secrets/
+# Ak sú to adresáre, zmaž ich:
+find secrets/ -mindepth 1 -maxdepth 1 -type d -not -name 'README.txt' -exec rm -rf {} +
+```
+
+---
+
+### OCR service sa nespúšťa / zostáva "starting"
+
+OCR service pri prvom štarte inicializuje EasyOCR modely — môže trvať **2–3 minúty**.
+
+```bash
+# Sleduj štart OCR:
+docker compose logs ocr-service -f
+
+# Očakávaný výstup po úspešnom štarte:
+# EasyOCR ready.
+# [INFO] Booting worker with pid: ...
+```
+
+Ak OCR service stále zlyháva:
+```bash
+# Skontroluj zdravie kontajnera:
+docker compose ps
+
+# Ak je "unhealthy", pozri chybu:
+docker inspect rafting-ocr | grep -A 10 '"Health"'
+```
 
 ---
 
@@ -553,21 +740,23 @@ Potom znova spusti príkazy z Kroku 3.
 npm error Missing: express-session from lock file
 ```
 
-**Riešenie:**
-```powershell
+```bash
+# Aktualizuj lock file:
 npm install
-docker compose up --build -d
+docker compose build --no-cache rafting-dunajec
+docker compose up -d
 ```
 
 ---
 
 ### Zabudnuté heslo do aplikácie
 
+#### Windows
 ```powershell
-function New-B64Secret([int]$bytes) {
-    $buf = New-Object byte[] $bytes
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buf)
-    return [Convert]::ToBase64String($buf)
+function New-B64Secret([int]$b) {
+    $x = New-Object byte[] $b
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($x)
+    return [Convert]::ToBase64String($x)
 }
 [System.IO.File]::WriteAllText(".\secrets\app_password", (New-B64Secret 18), [System.Text.Encoding]::ASCII)
 $pass = [System.IO.File]::ReadAllText(".\secrets\app_password", [System.Text.Encoding]::ASCII)
@@ -575,33 +764,38 @@ Write-Host "NOVE HESLO: $pass"
 docker compose restart
 ```
 
+#### Linux
+```bash
+openssl rand -base64 18 | tr -d '\n=' | head -c 24 > secrets/app_password
+echo "NOVE HESLO: $(cat secrets/app_password)"
+docker compose restart
+```
+
 ---
 
 ### Aplikácia hlási "Chyba databázy" hneď po prihlásení
 
-**Príčina:** PostgreSQL sa ešte nespustil (typicky pri prvom štarte — inicializácia trvá ~10 sekúnd).
-
+**Príčina:** PostgreSQL sa ešte nespustil (typicky pri prvom štarte — inicializácia ~10 sekúnd).  
 **Riešenie:** Počkaj 15 sekúnd a obnov stránku (F5).
 
 ---
 
 ### Prvý build trvá príliš dlho / padá so sieťovou chybou
 
-**Príčina:** Eduroam, korporátna WiFi alebo obmedzená sieť blokuje sťahovanie Docker image.
-
-**Riešenie:** Použi mobilný hotspot na prvý build. Po úspešnom zbuildovaní internet **nie je potrebný** — všetko beží lokálne.
+**Príčina:** Obmedzená sieť blokuje sťahovanie Docker image alebo PyTorch (~1.5 GB).  
+**Riešenie:** Použi mobilný hotspot na prvý build. Po zbuildovaní internet **nie je potrebný**.
 
 ---
 
 ### Databáza je prázdna po reštarte počítača
 
-**Príčina:** Volume `pg_data` bol zmazaný (napr. príkazom `docker compose down -v`) alebo nebol vytvorený.
+**Príčina:** Volume `pg_data` bol zmazaný.
 
-**Overenie:**
-```powershell
-docker volume ls
+```bash
+docker volume ls   # mala by existovať: raftingdunajec_pg_data
 ```
-Mala by existovať `raftingdunajec_pg_data`. Ak nie, obnov zo zálohy.
+
+Ak neexistuje, obnov zo zálohy.
 
 > **VAROVANIE:** Nikdy nespúšťaj `docker compose down -v` — parameter `-v` zmažne volume s celou databázou!
 
@@ -611,20 +805,21 @@ Mala by existovať `raftingdunajec_pg_data`. Ak nie, obnov zo zálohy.
 
 1. Over že Netbird beží na **oboch** zariadeniach: `netbird status`
 2. Over, že obe zariadenia sú v **rovnakej Netbird sieti** (dashboard → Peers)
-3. Over port proxy na hostiteľovi: `netsh interface portproxy show all`
-4. Skontroluj Windows Firewall — port 3001 musí byť povolený
+3. **Windows:** Over port proxy: `netsh interface portproxy show all`
+4. **Linux:** Over iptables: `sudo iptables -t nat -L PREROUTING -n`
+5. Skontroluj firewall — port 3001 musí byť povolený
 
 ---
 
-### Aplikácia zobrazuje login stránku aj keď si bol prihlásený
+### Skenovanie dokladu — kamera nefunguje na mobile
 
-**Príčina:** Session expirovala (7 dní nepoužívania) alebo bol reštartovaný kontajner.
+**Príčina:** `getUserMedia` (prístup ku kamere) vyžaduje HTTPS. Netbird VPN používa plain HTTP.
 
-**Riešenie:** Normálne sa prihlásiš znova. Session vydrží ďalších 7 dní.
+**Riešenie:** Použi **Súbor / Skener** tab — nafoť doklad mobilom a zdieľaj obrázok, alebo odfot mobilom a pošli na počítač cez sieť.
 
 ---
 
-## 12. Bezpečnostná architektúra
+## 13. Bezpečnostná architektúra
 
 ### Šifrovanie citlivých dát
 
@@ -638,58 +833,78 @@ Tieto polia sú šifrované **pred uložením** do databázy (aplikačné šifro
 | `cust_address` | Adresa trvalého pobytu |
 | `cust_phone` | Telefónne číslo |
 
-**Algoritmus:** AES-256-GCM (autentifikované šifrovanie — detekuje aj manipuláciu s dátami)  
-**Formát v DB:** `iv_hex:authTag_hex:ciphertext_hex` (TEXT stĺpec)  
+**Algoritmus:** AES-256-GCM (autentifikované šifrovanie)  
+**Formát v DB:** `iv_hex:authTag_hex:ciphertext_hex`  
 **Kľúč:** `secrets/app_encryption_key` — 32 bajtov
 
-Útočník s prístupom k databáze bez kľúča vidí len nečitateľné hex reťazce.
+### OCR a súkromie
+
+- Odfotený doklad sa **nikdy nezapíše na disk** (ani server-side, ani v OCR kontajneri)
+- Obraz sa spracuje v pamäti (RAM) a po extrakcii textu je zahodený
+- OCR kontajner (`rafting-ocr`) nie je vystavený na žiaden hostiteľský port — dostupný len vnútri Docker siete
+- V logoch sa zaznamenáva len počet rozpoznaných blokov textu, nikdy obsah obrazu
 
 ### Vrstvená ochrana
 
 | Vrstva | Mechanizmus |
 |--------|-------------|
 | Sieťová izolácia | Netbird WireGuard VPN — len autorizované zariadenia sa dostanú k aplikácii |
-| Port binding | `127.0.0.1:3001` — port nie je vystavený do lokálnej LAN siete |
+| Port binding | `127.0.0.1:3001` — port nie je vystavený do lokálnej LAN |
+| OCR izolácia | `rafting-ocr` bez vystavených portov — len interná Docker sieť |
 | Aplikačné prihlásenie | express-session s `timingSafeEqual` (ochrana proti timing attacku) |
 | Session bezpečnosť | `HttpOnly`, `SameSite=Strict`, 7-dňová rolling session |
-| Databázový používateľ | `rafting_app` má len DML oprávnenia — žiadne DDL, žiadny superuser |
+| Databázový používateľ | `rafting_app` — len DML oprávnenia, žiadne DDL |
 | Šifrovanie PII | AES-256-GCM pre všetky citlivé polia |
-| Audit log | PostgreSQL trigger zaznamenáva každú zmenu (bez hodnôt PII) |
+| Audit log | PostgreSQL trigger — každý INSERT/UPDATE/DELETE (bez hodnôt PII) |
 | Docker secrets | Heslá v `tmpfs` súboroch — neobjavujú sa v `docker inspect` ani env premenných |
 | Container hardening | `no-new-privileges: true` |
 
 ### GDPR
 
-Aplikácia spracúva osobné údaje (mená, čísla dokladov, adresy). Šifrovanie PII polí a audit log sú implementované s ohľadom na GDPR pre slovenský/EÚ trh.
+Aplikácia spracúva osobné údaje (mená, čísla dokladov). Šifrovanie PII polí a audit log sú implementované s ohľadom na GDPR pre slovenský/EÚ trh.
 
 ---
 
-## 13. Dôležité súbory a ich umiestnenie
+## 14. Dôležité súbory a ich umiestnenie
 
 ### Zdrojový kód projektu
 ```
 RAFTING DUNAJEC/
-├── Dockerfile                    — definícia Docker image
-├── docker-compose.yml            — konfigurácia kontajnera, volumes, secrets
+├── Dockerfile                    — definícia Docker image (Node.js app)
+├── docker-compose.yml            — oba kontajnery, volumes, secrets, sieť
 ├── docker-entrypoint.sh          — štartovací skript (PG init + Node.js)
+├── install.bat                   — automatická inštalácia (Windows)
+├── START.bat                     — spustenie po reštarte (Windows)
+├── STOP.bat                      — zastavenie (Windows)
 ├── package.json                  — Node.js závislosti
 ├── package-lock.json             — uzamknuté verzie (nemeň manuálne)
-├── public/styles.css             — CSS design systém
-├── public/logo.png               — logo aplikácie
-├── src/                          — React frontend
+├── public/
+│   ├── styles.css                — CSS design systém
+│   └── logo.png
+├── src/                          — React frontend (Vite)
+│   ├── checkin.jsx               — formulár check-in
+│   ├── ScanIdModal.jsx           — modal skenovania dokladov (OCR)
+│   └── icons.jsx
 ├── server/
 │   ├── index.js                  — Express server, session, middleware
 │   ├── db.js                     — PostgreSQL connection pool
-│   ├── schema.sql                — Hlavná DB schéma
-│   ├── schema-security.sql       — Bezpečnostná schéma (user, audit, trigger)
+│   ├── schema.sql                — hlavná DB schéma
+│   ├── schema-security.sql       — bezpečnostná schéma (user, audit, trigger)
 │   ├── crypto-fields.js          — AES-256-GCM encrypt/decrypt
-│   ├── secrets.js                — Čítanie Docker secret súborov
-│   ├── migrate-encrypt.js        — Jednorazová migrácia plaintext → šifrované
-│   ├── middleware/requireAuth.js — Session autentifikácia
+│   ├── secrets.js                — čítanie Docker secret súborov
+│   ├── migrate-encrypt.js        — jednorazová migrácia plaintext → šifrované
+│   ├── middleware/
+│   │   └── requireAuth.js        — session autentifikácia
 │   └── routes/
 │       ├── orders.js             — CRUD API pre objednávky
-│       └── auth.js               — Login / logout / me
-└── scripts/backup.sh             — GPG-šifrovaná záloha databázy
+│       ├── auth.js               — login / logout / me
+│       └── ocr.js                — OCR proxy + MRZ parser + heuristika
+├── ocr-service/
+│   ├── Dockerfile                — python:3.11-slim + CPU PyTorch + EasyOCR
+│   ├── app.py                    — Flask API (/ocr, /health)
+│   └── requirements.txt          — flask, easyocr, pillow, numpy, gunicorn
+└── scripts/
+    └── backup.sh                 — GPG-šifrovaná záloha PostgreSQL
 ```
 
 ### Secrets (na každom počítači zvlášť, mimo gitu)
@@ -702,7 +917,7 @@ secrets/
 └── backup_passphrase    32 znakov  — GPG zálohy (uchovávať oddelene)
 ```
 
-### Docker volumes (spravuje Docker Desktop)
+### Docker volumes (spravuje Docker)
 ```
 raftingdunajec_pg_data   — Celá PostgreSQL databáza
                            Prežije: reštart kontajnera, reštart PC, docker compose down
@@ -713,27 +928,59 @@ raftingdunajec_pg_data   — Celá PostgreSQL databáza
 
 ## Rýchla referenčná karta
 
+### Windows (PowerShell)
+
 ```powershell
 # ── Základné operácie ──────────────────────────────────────────
-docker compose up -d                          # Spustiť aplikáciu
-docker compose down                           # Zastaviť (dáta ostanú)
-docker compose restart                        # Reštartovať
-docker compose up --build -d                  # Aktualizovať na novú verziu
-docker compose logs --tail=30                 # Zobraziť logy
-docker compose ps                             # Stav kontajnera
+docker compose up -d                              # Spustiť oba kontajnery
+docker compose down                               # Zastaviť (dáta ostanú)
+docker compose restart                            # Reštartovať
+docker compose up --build -d                      # Rebuild + spustiť
+docker compose logs --tail=30                     # Zobraziť logy
+docker compose ps                                 # Stav kontajnerov
 
-# ── Správa dát ────────────────────────────────────────────────
-docker exec rafting-dunajec /app/scripts/backup.sh          # Zálohovať
-docker exec rafting-dunajec node /app/server/migrate-encrypt.js  # Migrovať dáta
+# ── Správa dát ─────────────────────────────────────────────────
+docker exec rafting-dunajec /app/scripts/backup.sh
+docker exec rafting-dunajec node /app/server/migrate-encrypt.js
 
-# ── Heslá ─────────────────────────────────────────────────────
-# Zobraziť aktuálne heslo do aplikácie:
-$p=[System.IO.File]::ReadAllText(".\secrets\app_password",[System.Text.Encoding]::ASCII); Write-Host $p
+# ── Heslá ──────────────────────────────────────────────────────
+# Zobraziť aktuálne heslo:
+[System.IO.File]::ReadAllText(".\secrets\app_password",[System.Text.Encoding]::ASCII)
 
-# Vygenerovať nové heslo do aplikácie:
+# Vygenerovať nové heslo:
 function New-B64Secret([int]$b){$x=New-Object byte[] $b;[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($x);return [Convert]::ToBase64String($x)}
 [System.IO.File]::WriteAllText(".\secrets\app_password",(New-B64Secret 18),[System.Text.Encoding]::ASCII)
 docker compose restart
+```
+
+### Linux (Bash)
+
+```bash
+# ── Základné operácie ──────────────────────────────────────────
+docker compose up -d                              # Spustiť oba kontajnery
+docker compose down                               # Zastaviť (dáta ostanú)
+docker compose restart                            # Reštartovať
+docker compose up --build -d                      # Rebuild + spustiť
+docker compose logs --tail=30                     # Zobraziť logy
+docker compose ps                                 # Stav kontajnerov
+
+# ── Správa dát ─────────────────────────────────────────────────
+docker exec rafting-dunajec /app/scripts/backup.sh
+docker exec rafting-dunajec node /app/server/migrate-encrypt.js
+
+# ── Heslá ──────────────────────────────────────────────────────
+# Zobraziť aktuálne heslo:
+cat secrets/app_password
+
+# Vygenerovať nové heslo:
+openssl rand -base64 18 | tr -d '\n=' | head -c 24 > secrets/app_password
+echo "NOVE HESLO: $(cat secrets/app_password)"
+docker compose restart
+
+# ── Debug ──────────────────────────────────────────────────────
+docker compose logs ocr-service --tail=20         # Logy OCR servisu
+docker inspect rafting-ocr | grep -A5 '"Health"'  # Zdravie OCR kontajnera
+docker volume ls                                  # Overiť existenciu pg_data
 ```
 
 ---

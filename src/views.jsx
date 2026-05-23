@@ -276,6 +276,7 @@ function CalendarView({ lang, orders, onOpen }) {
   const today = _useMemo(() => new Date(), []);
   const [cursor, setCursor] = _useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selected, setSelected] = _useState(() => dateKey(today.toISOString()));
+  const [taxiOpen, setTaxiOpen] = _useState(false);
 
   const grid = _useMemo(() => {
     const year = cursor.getFullYear();
@@ -313,7 +314,18 @@ function CalendarView({ lang, orders, onOpen }) {
   const selectedPeople = selectedOrders.reduce((s, o) => s + (o.adults || 0) + (o.kids || 0), 0);
   const todayKey = dateKey(today.toISOString());
 
+  const bikeCount = selectedOrders.reduce((total, o) =>
+    total + (o.lines || []).filter(l => l.kind === 'BIKE').reduce((s, l) => s + (l.qty || 0), 0)
+  , 0);
+  const taxiOrders = selectedOrders.filter(o =>
+    (o.lines || []).some(l => l.kind === 'EXTRA' && l.label.toLowerCase().includes('taxi'))
+  );
+  const taxiPeople = taxiOrders.reduce((total, o) =>
+    total + (o.lines || []).filter(l => l.kind === 'EXTRA' && l.label.toLowerCase().includes('taxi')).reduce((s, l) => s + (l.qty || 0), 0)
+  , 0);
+
   return (
+    <>
     <div className="cal-wrap">
       <div className="cal">
         <div className="cal-head">
@@ -384,7 +396,7 @@ function CalendarView({ lang, orders, onOpen }) {
           {selectedOrders.length === 0 ? (
             <div className="empty">{t('no_orders_day', lang)}</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="cal-orders-list" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {selectedOrders.map(o => (
                 <button key={o.id} className="row between" onClick={() => onOpen(o)}
                   style={{
@@ -421,6 +433,80 @@ function CalendarView({ lang, orders, onOpen }) {
         </div>
       </div>
     </div>
+
+    <div className="cal-logistics">
+      <div className={'logistics-card' + (bikeCount === 0 ? ' dim' : '')}>
+        <div className="logistics-icon"><Icon name="bike" size={22} /></div>
+        <div>
+          <div className="logistics-label">{lang === 'sk' ? 'Bicykle na prípravu' : 'Bikes to prepare'}</div>
+          <div className="logistics-count">{bikeCount}</div>
+          <div className="logistics-sub">{lang === 'sk' ? 'kusov dnes' : 'units today'}</div>
+        </div>
+      </div>
+
+      <button
+        className={'logistics-card logistics-clickable' + (taxiPeople === 0 ? ' dim' : '')}
+        onClick={() => { if (taxiPeople > 0) setTaxiOpen(true); }}
+      >
+        <div className="logistics-icon"><Icon name="car" size={22} /></div>
+        <div style={{ flex: 1, textAlign: 'left' }}>
+          <div className="logistics-label">{lang === 'sk' ? 'Taxi späť' : 'Taxi back'}</div>
+          <div className="logistics-count">{taxiPeople}</div>
+          <div className="logistics-sub">{lang === 'sk' ? 'osôb odchádza' : 'people by taxi'}</div>
+        </div>
+        {taxiPeople > 0 && <Icon name="chevronRight" size={16} style={{ color: 'var(--muted)', flexShrink: 0 }} />}
+      </button>
+    </div>
+
+    {taxiOpen && (
+      <div className="modal-bg" onClick={() => setTaxiOpen(false)}>
+        <div className="modal" onClick={e => e.stopPropagation()}>
+          <div className="modal-head">
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                {fmtDate(selected + 'T00:00:00')} · {lang === 'sk' ? 'Taxi späť' : 'Taxi back'}
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 600, marginTop: 2, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Icon name="car" size={18} />
+                {taxiPeople} {lang === 'sk' ? 'osôb taxíkom' : 'people by taxi'}
+              </div>
+            </div>
+            <button className="btn btn-ghost" onClick={() => setTaxiOpen(false)}><Icon name="x" size={16} /></button>
+          </div>
+          <div className="modal-body">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {taxiOrders.map(o => {
+                const tQty = (o.lines || [])
+                  .filter(l => l.kind === 'EXTRA' && l.label.toLowerCase().includes('taxi'))
+                  .reduce((s, l) => s + (l.qty || 0), 0);
+                return (
+                  <button key={o.id} className="taxi-row" onClick={() => { setTaxiOpen(false); onOpen(o); }}>
+                    <span className="taxi-time">{fmtTime(arrivalOf(o))}</span>
+                    <span className="taxi-info">
+                      <span style={{ fontWeight: 600 }}>{o.customer.name} {o.customer.surname}</span>
+                      <span className="muted-text" style={{ fontSize: 11, display: 'block' }}>#{o.number} · {o.route?.replace('KM',' km')}</span>
+                    </span>
+                    <span className="taxi-pax">
+                      <span style={{ fontSize: 24, fontWeight: 700, lineHeight: 1 }}>{tQty}</span>
+                      <span style={{ fontSize: 10, color: 'var(--muted)' }}>{lang === 'sk' ? 'os.' : 'pax'}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="muted-text" style={{ fontSize: 13 }}>
+                {taxiOrders.length} {lang === 'sk' ? 'objednávok' : 'orders'}
+              </span>
+              <span style={{ fontWeight: 700, fontSize: 20 }}>
+                {taxiPeople} {lang === 'sk' ? 'osôb' : 'people'}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

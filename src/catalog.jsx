@@ -199,7 +199,7 @@ const T = {
   duplicate:      { sk: 'Duplikovať',           en: 'Duplicate' },
   delete:         { sk: 'Vymazať',              en: 'Delete' },
   confirm_delete: { sk: 'Naozaj vymazať túto objednávku?', en: 'Really delete this order?' },
-  required_warn:  { sk: 'Vyplň meno, priezvisko a aspoň jednu službu.', en: 'Fill in name, surname and at least one service.' },
+  required_warn:  { sk: 'Vyplň aspoň meno alebo priezvisko zákazníka.', en: 'Fill in at least a first name or surname.' },
   operator:       { sk: 'Obsluha',              en: 'Operator' },
   placeholder_note:{sk: '⚠︎ Cena nebola v špecifikácii — uprav podľa potreby.', en: '⚠︎ Price not in spec — edit if needed.' },
   months_long:    { sk: ['Január','Február','Marec','Apríl','Máj','Jún','Júl','August','September','Október','November','December'],

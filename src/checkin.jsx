@@ -440,7 +440,7 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
   const computed = subtotal + (manualAdj || 0);
   const finalAmount = override != null ? override : computed;
 
-  const canSave = customer.name.trim() && customer.surname.trim() && lines.length > 0;
+  const canSave = customer.name.trim() || customer.surname.trim();
 
   const save = async () => {
     if (!canSave) { alert(t('required_warn', lang)); return; }
@@ -509,7 +509,7 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
         </div>
         <div className="grid-3">
           <div className="field">
-            <label>{t('name', lang)}<span className="req">*</span></label>
+            <label>{t('name', lang)}<span className="req" title={lang === 'sk' ? 'Aspoň jedno z meno / priezvisko je povinné' : 'At least one of name / surname is required'}>*</span></label>
             <input value={customer.name}
             onChange={(e) => setCustomer({ ...customer, name: sanitizeName(e.target.value) })}
             maxLength={60}
@@ -517,7 +517,7 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
             placeholder="Jana" />
           </div>
           <div className="field">
-            <label>{t('surname', lang)}<span className="req">*</span></label>
+            <label>{t('surname', lang)}<span className="req" title={lang === 'sk' ? 'Aspoň jedno z meno / priezvisko je povinné' : 'At least one of name / surname is required'}>*</span></label>
             <input value={customer.surname}
             onChange={(e) => setCustomer({ ...customer, surname: sanitizeName(e.target.value).slice(0, 20) })}
             maxLength={20}

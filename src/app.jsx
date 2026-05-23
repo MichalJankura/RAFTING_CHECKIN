@@ -50,6 +50,7 @@ function App() {
   const [printing, setPrinting] = useS(false);
   const [editingOrder, setEditingOrder] = useS(null);
   const [pricingVersion, setPricingVersion] = useS(0);
+  const [deleteConfirmOrder, setDeleteConfirmOrder] = useS(null);
 
   useE(() => { localStorage.setItem('rd_lang', lang); }, [lang]);
   useE(() => { window.location.hash = view; }, [view]);
@@ -140,12 +141,21 @@ function App() {
     showToast(action === 'reset' ? t('prices_reset', lang) : t('prices_saved', lang), 'success');
   };
 
-  const handleDelete = async (order) => {
-    if (!confirm(t('confirm_delete', lang))) return;
+  const handleDelete = (order) => {
+    setDeleteConfirmOrder(order);
+  };
+
+  const handleDeleteConfirm = async () => {
+    const order = deleteConfirmOrder;
+    setDeleteConfirmOrder(null);
     try {
       await deleteOrder(order.id);
       setOrders(cur => cur.filter(o => o.id !== order.id));
       setOpenOrder(null);
+      showToast(
+        lang === 'sk' ? `Objednávka #${order.number} bola vymazaná` : `Order #${order.number} deleted`,
+        'error'
+      );
     } catch (e) {
       showToast(lang === 'sk' ? 'Chyba pri mazaní' : 'Delete failed', 'error');
     }
@@ -266,6 +276,51 @@ function App() {
                   onEdit={handleEdit}
                   onToggleCompleted={handleToggleCompleted}
                   onDelete={handleDelete} />
+
+      {deleteConfirmOrder && (
+        <div className="modal-bg" onClick={() => setDeleteConfirmOrder(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="modal-head">
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                  {lang === 'sk' ? 'Potvrdiť vymazanie' : 'Confirm deletion'}
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 600, marginTop: 2 }}>
+                  {lang === 'sk' ? 'Zmazať objednávku?' : 'Delete order?'}
+                </div>
+              </div>
+              <button className="btn btn-ghost" onClick={() => setDeleteConfirmOrder(null)}>
+                <Icon name="x" size={16} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="delete-confirm-box">
+                <Icon name="trash" size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                    #{deleteConfirmOrder.number} — {deleteConfirmOrder.customer.name} {deleteConfirmOrder.customer.surname}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    {lang === 'sk'
+                      ? 'Táto akcia je nevratná. Objednávka bude trvalo vymazaná zo systému.'
+                      : 'This action cannot be undone. The order will be permanently removed from the system.'}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button className="btn" onClick={() => setDeleteConfirmOrder(null)}>
+                {lang === 'sk' ? 'Zrušiť' : 'Cancel'}
+              </button>
+              <span style={{ flex: 1 }} />
+              <button className="btn btn-danger" onClick={handleDeleteConfirm}>
+                <Icon name="trash" size={14} />
+                {lang === 'sk' ? 'Áno, zmazať' : 'Yes, delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <PrintRoot order={printOrder} lang={lang} show={printing} />
 
