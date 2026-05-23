@@ -348,7 +348,62 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
   const [notes, setNotes] = useState(prefill?.notes || '');
   const [saving, setSaving] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  const [ocrPhase, setOcrPhase] = useState('idle'); // 'idle' | 'scanning' | 'done' | 'error'
+  const [ocrResult, setOcrResult] = useState(null); // { raw, mapped, previewSrc }
+  const [ocrError, setOcrError] = useState('');
+  const [cardExpanded, setCardExpanded] = useState(false);
+  const [ocrView, setOcrView] = useState('ocr'); // 'ocr' | 'preview'
   const lineIdRef = useRef(lines.length ? Math.max(...lines.map((l) => l.id || 0)) + 1 : 1);
+
+  const handleIdCapture = async (compressedDataUrl) => {
+    setShowScanModal(false);
+    setOcrPhase('scanning');
+    setOcrError('');
+    setOcrResult({ previewSrc: compressedDataUrl });
+    setCardExpanded(false);
+
+    try {
+      const res = await fetch('/api/ocr/scan-id', {
+        method:      'POST',
+        headers:     { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body:        JSON.stringify({ image: compressedDataUrl }),
+      });
+
+      if (res.status === 401) { window.location.reload(); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `OCR failed (${res.status})`);
+      }
+
+      const data = await res.json();
+
+      setCustomer((prev) => ({
+        ...prev,
+        ...(data.mapped?.name    ? { name:    sanitizeName(data.mapped.name) } : {}),
+        ...(data.mapped?.surname ? { surname: sanitizeName(data.mapped.surname).slice(0, 20) } : {}),
+        ...(data.mapped?.country ? { country: data.mapped.country } : {}),
+        ...(data.mapped?.idCode  ? { idCode:  sanitizeIdCode(data.mapped.idCode) } : {}),
+      }));
+
+      setOcrResult({ previewSrc: compressedDataUrl, ...data });
+      setOcrPhase('done');
+      setCardExpanded(true);
+      setOcrView(data.raw ? 'ocr' : 'preview');
+    } catch (err) {
+      setOcrError(err.message);
+      setOcrPhase('error');
+      setCardExpanded(true);
+      setOcrView('preview');
+    }
+  };
+
+  const resetOcr = () => {
+    setOcrPhase('idle');
+    setOcrResult(null);
+    setOcrError('');
+    setCardExpanded(false);
+  };
 
   const toggleSvc = (key) => {
     const next = new Set(activeSvc);
@@ -487,6 +542,56 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
         </div>
       }
 
+      {/* OCR Progress Banner */}
+      {ocrPhase !== 'idle' && (
+        <div className="ocr-banner">
+          {ocrPhase === 'scanning' && (
+            <div className="ocr-banner-scanning">
+              <div className="ocr-banner-row">
+                <div className="ocr-spinner-sm" />
+                <span>
+                  {lang === 'sk' ? 'Spracovávam doklad cez EasyOCR…' : 'Processing document with EasyOCR…'}
+                </span>
+              </div>
+              <div className="ocr-indeterminate-bar" />
+            </div>
+          )}
+          {ocrPhase === 'done' && (
+            <div className="ocr-banner-done">
+              <Icon name="check" size={14} style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>
+                {lang === 'sk'
+                  ? 'Doklad prečítaný — polia boli vyplnené automaticky'
+                  : 'Document read — fields filled automatically'}
+              </span>
+              <button className="btn btn-sm" onClick={() => setShowScanModal(true)}
+                style={{ marginLeft: 'auto', background: 'var(--success-tint)', borderColor: 'transparent', color: 'var(--success)' }}>
+                <Icon name="scan" size={12} />
+                {lang === 'sk' ? 'Skenovať znova' : 'Scan again'}
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={resetOcr} title="Dismiss">
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          )}
+          {ocrPhase === 'error' && (
+            <div className="ocr-banner-error">
+              <Icon name="info" size={14} style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>
+                {ocrError || (lang === 'sk' ? 'OCR zlyhalo' : 'OCR failed')}
+              </span>
+              <button className="btn btn-sm btn-primary" onClick={() => setShowScanModal(true)}>
+                <Icon name="scan" size={12} />
+                {lang === 'sk' ? 'Skúsiť znova' : 'Try again'}
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={resetOcr} title="Dismiss">
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ============ STEP 1: Customer ============ */}
       <div className="card">
         <div className="card-head">
@@ -560,6 +665,96 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
             placeholder="Mesto, ulica…" />
           </div>
         </div>
+
+        {/* ── Expandable OCR Details ── */}
+        {(ocrPhase === 'done' || ocrPhase === 'error') && ocrResult && (
+          <div className="ocr-expand-section">
+            <button
+              className={'ocr-expand-toggle' + (cardExpanded ? ' expanded' : '')}
+              onClick={() => setCardExpanded((v) => !v)}
+            >
+              <Icon name="scan" size={12} />
+              <span>{lang === 'sk' ? 'Detaily skenovania' : 'Scan details'}</span>
+              {ocrPhase === 'done' && ocrResult?.mapped?.source && (
+                <span className={'tag ' + (ocrResult.mapped.source === 'mrz' ? 'success' : 'accent')}
+                  style={{ fontSize: 9 }}>
+                  {ocrResult.mapped.source === 'mrz' ? 'MRZ ✓' : lang === 'sk' ? 'ODHAD' : 'ESTIMATE'}
+                </span>
+              )}
+              <span className="ocr-expand-chevron">
+                <Icon name="chevronDown" size={14} />
+              </span>
+            </button>
+
+            {cardExpanded && (
+              <div className="ocr-expand-body">
+                <div className="ocr-view-toggle">
+                  {ocrResult?.raw && (
+                    <button
+                      className={'ocr-view-btn' + (ocrView === 'ocr' ? ' active' : '')}
+                      onClick={() => setOcrView('ocr')}
+                    >
+                      <Icon name="copy" size={12} />
+                      {lang === 'sk' ? 'OCR výstup' : 'OCR Output'}
+                    </button>
+                  )}
+                  {ocrResult?.previewSrc && (
+                    <button
+                      className={'ocr-view-btn' + (ocrView === 'preview' ? ' active' : '')}
+                      onClick={() => setOcrView('preview')}
+                    >
+                      <Icon name="idCard" size={12} />
+                      {lang === 'sk' ? 'Náhľad dokladu' : 'ID Preview'}
+                    </button>
+                  )}
+                </div>
+
+                {ocrPhase === 'error' && (
+                  <div className="notice" style={{
+                    borderColor: 'var(--danger)', background: 'var(--danger-tint)',
+                    color: 'var(--danger)', marginBottom: 12,
+                  }}>
+                    <Icon name="info" size={14} style={{ flex: '0 0 auto', marginTop: 2 }} />
+                    <span>{ocrError || (lang === 'sk' ? 'OCR zlyhalo' : 'OCR failed')}</span>
+                  </div>
+                )}
+
+                {ocrView === 'ocr' && ocrResult?.raw && (
+                  <textarea
+                    readOnly
+                    value={ocrResult.raw}
+                    onClick={(e) => e.target.select()}
+                    rows={Math.min(10, ocrResult.raw.split('\n').length + 1)}
+                    style={{
+                      width: '100%',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 12,
+                      padding: '10px 12px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--r-sm)',
+                      background: 'var(--surface-2)',
+                      resize: 'vertical',
+                      cursor: 'text',
+                    }}
+                  />
+                )}
+
+                {ocrView === 'preview' && ocrResult?.previewSrc && (
+                  <img
+                    src={ocrResult.previewSrc}
+                    alt={lang === 'sk' ? 'Náhľad dokladu' : 'ID preview'}
+                    style={{
+                      maxWidth: '100%',
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      display: 'block',
+                    }}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ============ STEP 2: Route & people ============ */}
@@ -952,15 +1147,7 @@ function CheckIn({ lang, onSaved, prefill, isEdit, onCancelEdit }) {
       {showScanModal &&
       <ScanIdModal
           lang={lang}
-          onApply={(fields) => {
-            setCustomer((prev) => ({
-              ...prev,
-              ...(fields.name    ? { name:    sanitizeName(fields.name)        } : {}),
-              ...(fields.surname ? { surname: sanitizeName(fields.surname).slice(0, 20) } : {}),
-              ...(fields.country ? { country: fields.country                  } : {}),
-              ...(fields.idCode  ? { idCode:  sanitizeIdCode(fields.idCode)   } : {}),
-            }));
-          }}
+          onCapture={handleIdCapture}
           onClose={() => setShowScanModal(false)}
         />
       }

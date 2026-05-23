@@ -67,9 +67,59 @@ const ID_TYPES = [
 ];
 
 const COUNTRIES = [
-  'Slovensko / Slovakia', 'Česko / Czechia', 'Poľsko / Poland', 'Maďarsko / Hungary',
-  'Nemecko / Germany', 'Rakúsko / Austria', 'Ukrajina / Ukraine', 'Veľká Británia / UK',
-  'Holandsko / Netherlands', 'Francúzsko / France', 'Taliansko / Italy', 'USA',
+  // Susedné krajiny
+  'Slovensko / Slovakia',
+  'Česko / Czechia',
+  'Poľsko / Poland',
+  'Maďarsko / Hungary',
+  'Rakúsko / Austria',
+  'Nemecko / Germany',
+  'Ukrajina / Ukraine',
+
+  // Ostatné krajiny EÚ
+  'Belgicko / Belgium',
+  'Bulharsko / Bulgaria',
+  'Chorvátsko / Croatia',
+  'Cyprus / Cyprus',
+  'Dánsko / Denmark',
+  'Estónsko / Estonia',
+  'Fínsko / Finland',
+  'Francúzsko / France',
+  'Grécko / Greece',
+  'Holandsko / Netherlands',
+  'Írsko / Ireland',
+  'Litva / Lithuania',
+  'Lotyšsko / Latvia',
+  'Luxembursko / Luxembourg',
+  'Malta / Malta',
+  'Portugalsko / Portugal',
+  'Rumunsko / Romania',
+  'Slovinsko / Slovenia',
+  'Španielsko / Spain',
+  'Švédsko / Sweden',
+  'Taliansko / Italy',
+
+  // Balkánske krajiny (mimo EÚ)
+  'Albánsko / Albania',
+  'Bosna a Hercegovina / Bosnia and Herzegovina',
+  'Čierna Hora / Montenegro',
+  'Kosovo / Kosovo',
+  'Severné Macedónsko / North Macedonia',
+  'Srbsko / Serbia',
+
+  // Ostatná Európa
+  'Bielorusko / Belarus',
+  'Moldavsko / Moldova',
+  'Nórsko / Norway',
+  'Rusko / Russia',
+  'Švajčiarsko / Switzerland',
+  'Turecko / Turkey',
+  'Veľká Británia / UK',
+
+  // Mimo Európy
+  'India / India',
+  'Izrael / Israel',
+  'USA',
 ];
 
 const T = {

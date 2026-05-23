@@ -1,7 +1,7 @@
-// RAFTING DUNAJEC — ID scan modal
-// Supports: mobile camera with ID-frame overlay, desktop file upload / scanner drop-zone.
-// The captured image is resized/compressed in-browser, sent to /api/ocr/scan-id,
-// and discarded immediately — it is never stored locally or server-side.
+// RAFTING DUNAJEC — ID capture modal
+// Captures image (camera or file upload), compresses it, and calls onCapture(dataUrl).
+// OCR processing and result display happen in the parent (checkin.jsx).
+// The image is never stored locally or server-side.
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Icon } from './icons.jsx';
@@ -19,7 +19,6 @@ function hasCameraAPI() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
 
-// Resize + JPEG-compress a data URL to keep the payload under ~4 MB.
 function compressImage(dataUrl, maxW = 1920, maxH = 1200, quality = 0.85) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -39,25 +38,20 @@ function compressImage(dataUrl, maxW = 1920, maxH = 1200, quality = 0.85) {
   });
 }
 
-// Sample pixel variance in the ID-card overlay region to infer card presence.
-// Returns a 0-1 score; > 0.18 means a document is likely in frame.
 function measureCardPresence(video, overlayFrac = 0.72) {
   try {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (!vw || !vh) return 0;
-
     const ow = Math.round(vw * overlayFrac);
-    const oh = Math.round(ow / 1.586);  // ID card ratio (85.6 × 53.98 mm)
+    const oh = Math.round(ow / 1.586);
     const ox = Math.round((vw - ow) / 2);
     const oy = Math.round((vh - oh) / 2);
-
     const cv = document.createElement('canvas');
     cv.width  = ow;
     cv.height = oh;
     cv.getContext('2d').drawImage(video, ox, oy, ow, oh, 0, 0, ow, oh);
     const px = cv.getContext('2d').getImageData(0, 0, ow, oh).data;
-
     let sum = 0, sumSq = 0, count = 0;
     const stride = Math.max(4, Math.floor(px.length / (4 * 2000))) * 4;
     for (let i = 0; i < px.length; i += stride) {
@@ -74,39 +68,19 @@ function measureCardPresence(video, overlayFrac = 0.72) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-function ScanIdModal({ lang, onApply, onClose }) {
+function ScanIdModal({ lang, onCapture, onClose }) {
   const canCamera = hasCameraAPI();
-  const [mode, setMode]               = useState(() => (isMobileDevice() && canCamera) ? 'camera' : 'upload');
+  const [mode, setMode]             = useState(() => (isMobileDevice() && canCamera) ? 'camera' : 'upload');
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError]   = useState(null);
   const [cardDetected, setCardDetected] = useState(false);
-  const [scanning, setScanning]         = useState(false);
-  const [result, setResult]             = useState(null);
-  const [error, setError]               = useState(null);
-  const [previewSrc, setPreviewSrc]     = useState(null);
+  const [preparing, setPreparing]       = useState(false);
   const [dragOver, setDragOver]         = useState(false);
 
-  // Result-panel state
-  const [editedFields, setEditedFields] = useState({ name: '', surname: '', country: '', idCode: '' });
-  const [resultView, setResultView]     = useState('ocr'); // 'ocr' | 'preview'
-
-  const videoRef     = useRef(null);
-  const streamRef    = useRef(null);
-  const detectorRef  = useRef(null);
+  const videoRef    = useRef(null);
+  const streamRef   = useRef(null);
+  const detectorRef = useRef(null);
   const fileInputRef = useRef(null);
-
-  // Populate editable fields when OCR result arrives
-  useEffect(() => {
-    if (!result) return;
-    setEditedFields({
-      name:    result.mapped?.name    || '',
-      surname: result.mapped?.surname || '',
-      country: result.mapped?.country || '',
-      idCode:  result.mapped?.idCode  || '',
-    });
-    // Default tab: OCR text if available, otherwise preview
-    setResultView(result.raw ? 'ocr' : 'preview');
-  }, [result]);
 
   // ── Camera control ──────────────────────────────────────────────────────────
 
@@ -146,13 +120,12 @@ function ScanIdModal({ lang, onApply, onClose }) {
         : err.name === 'NotFoundError'
           ? (lang === 'sk' ? 'Žiadna kamera nebola nájdená.' : 'No camera found on this device.')
           : (lang === 'sk'
-              ? 'Kamera nie je dostupná. Pre snímanie na mobile vyžaduje HTTPS. Skúste režim nahratia súboru.'
-              : 'Camera unavailable. Mobile camera requires HTTPS. Use file upload instead.');
+              ? 'Kamera nie je dostupná. Skúste režim nahratia súboru.'
+              : 'Camera unavailable. Use file upload instead.');
       setCameraError(msg);
     }
   }, [lang]);
 
-  // Card-presence detection loop
   useEffect(() => {
     if (!cameraActive || !videoRef.current) return;
     detectorRef.current = setInterval(() => {
@@ -163,53 +136,23 @@ function ScanIdModal({ lang, onApply, onClose }) {
     return () => { if (detectorRef.current) clearInterval(detectorRef.current); };
   }, [cameraActive]);
 
-  // Start/stop camera when mode changes
   useEffect(() => {
     if (mode === 'camera') startCamera();
     return () => stopCamera();
-  }, [mode]); // intentionally omitting startCamera/stopCamera to avoid restart loops
+  }, [mode]); // intentionally omitting startCamera/stopCamera
 
-  // Cleanup on unmount
   useEffect(() => () => stopCamera(), []); // eslint-disable-line
 
-  // ── Image processing ────────────────────────────────────────────────────────
+  // ── Capture & compress ──────────────────────────────────────────────────────
 
-  const processImage = useCallback(async (dataUrl) => {
-    setScanning(true);
-    setError(null);
-    setResult(null);
-    setPreviewSrc(null);
-
+  const handleCapture = useCallback(async (rawDataUrl) => {
+    setPreparing(true);
+    stopCamera();
     let compressed;
-    try {
-      compressed = await compressImage(dataUrl);
-    } catch {
-      compressed = dataUrl;
-    }
-    setPreviewSrc(compressed);
-
-    try {
-      const res = await fetch('/api/ocr/scan-id', {
-        method:      'POST',
-        headers:     { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body:        JSON.stringify({ image: compressed }),
-      });
-
-      if (res.status === 401) { window.location.reload(); return; }
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `OCR failed (${res.status})`);
-      }
-
-      const data = await res.json();
-      setResult(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setScanning(false);
-    }
-  }, []);
+    try { compressed = await compressImage(rawDataUrl); }
+    catch { compressed = rawDataUrl; }
+    onCapture(compressed); // parent will close modal + start OCR
+  }, [stopCamera, onCapture]);
 
   const capturePhoto = useCallback(() => {
     const video = videoRef.current;
@@ -218,49 +161,15 @@ function ScanIdModal({ lang, onApply, onClose }) {
     cv.width  = video.videoWidth;
     cv.height = video.videoHeight;
     cv.getContext('2d').drawImage(video, 0, 0);
-    stopCamera();
-    processImage(cv.toDataURL('image/jpeg', 0.95));
-  }, [stopCamera, processImage]);
+    handleCapture(cv.toDataURL('image/jpeg', 0.95));
+  }, [handleCapture]);
 
   const handleFile = useCallback((file) => {
     if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
-    reader.onload = e => processImage(e.target.result);
+    reader.onload = e => handleCapture(e.target.result);
     reader.readAsDataURL(file);
-  }, [processImage]);
-
-  const reset = useCallback(() => {
-    setResult(null);
-    setError(null);
-    setPreviewSrc(null);
-    setScanning(false);
-    setEditedFields({ name: '', surname: '', country: '', idCode: '' });
-    if (mode === 'camera') startCamera();
-  }, [mode, startCamera]);
-
-  // ── Apply helpers ───────────────────────────────────────────────────────────
-
-  const applyField = (key) => {
-    const val = editedFields[key];
-    if (val) onApply({ [key]: val });
-  };
-
-  const applyAll = () => {
-    const defined = Object.fromEntries(
-      Object.entries(editedFields).filter(([, v]) => v)
-    );
-    if (Object.keys(defined).length) onApply(defined);
-    onClose();
-  };
-
-  const anyFieldFilled = Object.values(editedFields).some(v => v);
-
-  const FIELD_META = [
-    { key: 'name',    label: lang === 'sk' ? 'Meno'          : 'First name' },
-    { key: 'surname', label: lang === 'sk' ? 'Priezvisko'    : 'Surname'    },
-    { key: 'country', label: lang === 'sk' ? 'Krajina'       : 'Country'    },
-    { key: 'idCode',  label: lang === 'sk' ? 'Číslo dokladu' : 'ID number'  },
-  ];
+  }, [handleCapture]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -277,8 +186,8 @@ function ScanIdModal({ lang, onApply, onClose }) {
             </div>
             <div className="muted-text" style={{ fontSize: 11, marginTop: 3 }}>
               {lang === 'sk'
-                ? 'Doklad nie je ukladaný — obraz sa spracuje cez OCR a zahodí.'
-                : 'Image is not stored — forwarded to OCR and discarded.'}
+                ? 'Odfotografujte doklad — OCR spustí automaticky po nasnímaní'
+                : 'Capture the ID — OCR starts automatically after capture'}
             </div>
           </div>
           <button className="btn btn-sm btn-ghost" onClick={onClose} title="Close">
@@ -286,8 +195,8 @@ function ScanIdModal({ lang, onApply, onClose }) {
           </button>
         </div>
 
-        {/* Mode toggle — hidden while scanning or showing results */}
-        {!scanning && !result && !error && (
+        {/* Mode toggle — hidden while preparing */}
+        {!preparing && (
           <div className="modal-tabs">
             <button
               className={'modal-tab' + (mode === 'camera' ? ' active' : '')}
@@ -309,8 +218,21 @@ function ScanIdModal({ lang, onApply, onClose }) {
 
         <div className="modal-body">
 
-          {/* ── CAMERA MODE ── */}
-          {mode === 'camera' && !scanning && !result && !error && (
+          {/* Brief compress-and-hand-off state */}
+          {preparing && (
+            <div className="scan-loading">
+              <div className="ocr-spinner" />
+              <div style={{ fontWeight: 600, fontSize: 14, marginTop: 18 }}>
+                {lang === 'sk' ? 'Príprava obrazu…' : 'Preparing image…'}
+              </div>
+              <div className="muted-text" style={{ fontSize: 12, marginTop: 5 }}>
+                {lang === 'sk' ? 'OCR spustí ihneď po odovzdaní' : 'OCR will start right after handoff'}
+              </div>
+            </div>
+          )}
+
+          {/* Camera mode */}
+          {mode === 'camera' && !preparing && (
             <div className="camera-wrap">
               {cameraError ? (
                 <div className="notice" style={{ margin: 0, flexDirection: 'column', gap: 12 }}>
@@ -337,7 +259,6 @@ function ScanIdModal({ lang, onApply, onClose }) {
                       muted
                       autoPlay
                     />
-                    {/* ID-card overlay with animated corner brackets */}
                     <div className={'id-frame' + (cardDetected ? ' detected' : '')}>
                       <span className="corner tl" />
                       <span className="corner tr" />
@@ -363,8 +284,8 @@ function ScanIdModal({ lang, onApply, onClose }) {
             </div>
           )}
 
-          {/* ── UPLOAD MODE ── */}
-          {mode === 'upload' && !scanning && !result && !error && (
+          {/* Upload mode */}
+          {mode === 'upload' && !preparing && (
             <div
               className={'drop-zone' + (dragOver ? ' drag-over' : '')}
               onClick={() => fileInputRef.current?.click()}
@@ -392,170 +313,6 @@ function ScanIdModal({ lang, onApply, onClose }) {
               <div className="muted-text" style={{ fontSize: 12, marginTop: 4 }}>
                 JPG · PNG · BMP · TIFF · max 5 MB
               </div>
-            </div>
-          )}
-
-          {/* ── SCANNING / LOADING ── */}
-          {scanning && (
-            <div className="scan-loading">
-              <div className="ocr-spinner" />
-              <div style={{ fontWeight: 600, fontSize: 14, marginTop: 18 }}>
-                {lang === 'sk' ? 'Spracovávam doklad…' : 'Processing ID…'}
-              </div>
-              <div className="muted-text" style={{ fontSize: 12, marginTop: 5 }}>
-                {lang === 'sk' ? 'EasyOCR číta text — chvíľu počkajte' : 'EasyOCR reading text — please wait'}
-              </div>
-            </div>
-          )}
-
-          {/* ── ERROR ── */}
-          {error && !scanning && (
-            <div>
-              <div className="notice" style={{
-                borderColor: 'var(--danger)', background: 'var(--danger-tint)', color: 'var(--danger)',
-                marginBottom: 16,
-              }}>
-                <Icon name="info" size={14} style={{ flex: '0 0 auto', marginTop: 2 }} />
-                <span>{error}</span>
-              </div>
-
-              {previewSrc && (
-                <div style={{ marginBottom: 16 }}>
-                  <div className="muted-text" style={{ fontSize: 12, marginBottom: 6 }}>
-                    {lang === 'sk' ? 'Náhľad (doklad nerozpoznaný)' : 'Preview (ID not recognized)'}
-                  </div>
-                  <img
-                    src={previewSrc} alt="ID preview"
-                    style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid var(--border)' }}
-                  />
-                </div>
-              )}
-
-              <button className="btn btn-primary" onClick={reset}>
-                <Icon name="scan" size={13} />
-                {lang === 'sk' ? 'Skúsiť znova' : 'Try again'}
-              </button>
-            </div>
-          )}
-
-          {/* ── RESULTS ── */}
-          {result && !scanning && (
-            <div>
-
-              {/* Editable mapped fields */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <span style={{ fontWeight: 600, fontSize: 13 }}>
-                    {lang === 'sk' ? 'Rozpoznané údaje' : 'Detected fields'}
-                  </span>
-                  {result.mapped?.source && (
-                    <span className={'tag ' + (result.mapped.source === 'mrz' ? 'success' : 'accent')}
-                      style={{ fontSize: 9, letterSpacing: '0.06em' }}>
-                      {result.mapped.source === 'mrz' ? 'MRZ ✓' : lang === 'sk' ? 'ODHAD' : 'ESTIMATE'}
-                    </span>
-                  )}
-                  <span className="muted-text" style={{ fontSize: 11, marginLeft: 'auto' }}>
-                    {lang === 'sk' ? 'Polia môžete upraviť' : 'Fields are editable'}
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  {FIELD_META.map(({ key, label }) => (
-                    <div key={key} className="ocr-field-row">
-                      <span className="ocr-field-label">{label}</span>
-                      <input
-                        className="ocr-field-input"
-                        value={editedFields[key] || ''}
-                        onChange={e => setEditedFields(f => ({ ...f, [key]: e.target.value }))}
-                        placeholder="—"
-                      />
-                      <button
-                        className="btn btn-sm btn-primary"
-                        disabled={!editedFields[key]}
-                        onClick={() => applyField(key)}
-                      >
-                        {lang === 'sk' ? 'Použiť' : 'Apply'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
-                <button
-                  className="btn btn-accent"
-                  style={{ marginTop: 10, width: '100%' }}
-                  onClick={applyAll}
-                  disabled={!anyFieldFilled}
-                >
-                  <Icon name="check" size={13} />
-                  {lang === 'sk' ? 'Použiť všetky polia' : 'Apply all fields'}
-                </button>
-              </div>
-
-              {/* Toggle: OCR output ↔ ID preview */}
-              {(result.raw || previewSrc) && (
-                <div style={{ marginBottom: 16 }}>
-                  <div className="modal-tabs" style={{ marginBottom: 8 }}>
-                    {result.raw && (
-                      <button
-                        className={'modal-tab' + (resultView === 'ocr' ? ' active' : '')}
-                        onClick={() => setResultView('ocr')}
-                      >
-                        <Icon name="copy" size={12} />
-                        {lang === 'sk' ? 'OCR výstup' : 'OCR output'}
-                      </button>
-                    )}
-                    {previewSrc && (
-                      <button
-                        className={'modal-tab' + (resultView === 'preview' ? ' active' : '')}
-                        onClick={() => setResultView('preview')}
-                      >
-                        <Icon name="idCard" size={12} />
-                        {lang === 'sk' ? 'Náhľad dokladu' : 'ID preview'}
-                      </button>
-                    )}
-                  </div>
-
-                  {resultView === 'ocr' && result.raw && (
-                    <textarea
-                      readOnly
-                      value={result.raw}
-                      onClick={e => e.target.select()}
-                      rows={Math.min(10, result.raw.split('\n').length + 1)}
-                      style={{
-                        width: '100%',
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 12,
-                        padding: '10px 12px',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--r-sm)',
-                        background: 'var(--surface-2)',
-                        resize: 'vertical',
-                        cursor: 'text',
-                      }}
-                    />
-                  )}
-
-                  {resultView === 'preview' && previewSrc && (
-                    <img
-                      src={previewSrc}
-                      alt={lang === 'sk' ? 'Náhľad dokladu' : 'ID preview'}
-                      style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid var(--border)', display: 'block' }}
-                    />
-                  )}
-                </div>
-              )}
-
-              {/* Footer actions */}
-              <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
-                <button className="btn" onClick={reset}>
-                  <Icon name="scan" size={13} />
-                  {lang === 'sk' ? 'Skenovať znova' : 'Scan again'}
-                </button>
-                <button className="btn btn-ghost" onClick={onClose}>
-                  {lang === 'sk' ? 'Zavrieť' : 'Close'}
-                </button>
-              </div>
-
             </div>
           )}
 
